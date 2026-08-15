@@ -39,9 +39,14 @@ export function FileSelect() {
   }, [selectFile]);
 
   async function pick() {
-    const filters =
+    const formatFilters =
       config?.formats.map((f) => ({ name: f.label, extensions: f.extensions })) ??
       [];
+    const isLinux = navigator.platform.toLowerCase().startsWith("linux");
+    const filters =
+      isLinux && formatFilters.length > 0
+        ? [{ name: "All files", extensions: ["*"] }, ...formatFilters]
+        : formatFilters;
     const file = await open({ multiple: false, filters });
     if (typeof file === "string") {
       selectFile(file);
