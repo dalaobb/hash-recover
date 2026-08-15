@@ -544,12 +544,19 @@ fn is_executable(path: &Path) -> bool {
 /// The caller is responsible for variant support checks.
 pub fn extract(family: Family, path: &Path) -> ExtractResult {
     let Some(binary) = resolve_extractor(family.extractor()) else {
+        log::warn!(
+            "extractor {} binary not found in target/debug or target/release",
+            family.extractor()
+        );
         return unavailable();
     };
 
     let output = match std::process::Command::new(&binary).arg(path).output() {
         Ok(out) => out,
-        Err(_) => return unavailable(),
+        Err(err) => {
+            log::warn!("extractor {} failed to start: {err}", family.extractor());
+            return unavailable();
+        }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);

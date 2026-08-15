@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "appdev": "pnpm build:engines && pnpm tauri dev",
+    "build:engines": "cargo build --workspace --manifest-path src-tauri/Cargo.toml",
     "preview": "vite preview",
     "tauri": "tauri"
   },

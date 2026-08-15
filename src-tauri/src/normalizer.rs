@@ -48,11 +48,17 @@ const JOHN_FORMAT_7Z: &str = "7z";
 
 /// Split a hash line into its optional `filename:` prefix and the hash body.
 /// Extractor output is `name:$hash$...`; the hash itself never contains `:`.
+///
+/// The separator is the first `:` whose remainder begins with `$`, so Windows
+/// drive letters (`C:\...`) and colons inside filenames are handled too.
 fn split_filename(input: &str) -> (Option<String>, &str) {
-    if let Some((head, rest)) = input.split_once(':') {
-        if rest.starts_with('$') {
-            let filename = head.trim().to_string();
-            return (Some(filename), rest);
+    for (i, c) in input.char_indices() {
+        if c == ':' {
+            let rest = input[i + 1..].trim_start();
+            if rest.starts_with('$') {
+                let filename = input[..i].trim();
+                return (Some(filename.to_string()), rest);
+            }
         }
     }
     (None, input)
@@ -196,6 +202,20 @@ mod tests {
         let n = normalize_hash("rc4.pdf:$pdf$2*3*128*1*2*3").unwrap();
         assert_eq!(n.filename.as_deref(), Some("rc4.pdf"));
         assert_eq!(n.hash, "$pdf$2*3*128*1*2*3");
+    }
+
+    #[test]
+    fn strips_windows_drive_letter_prefix() {
+        let n = normalize_hash("C:\\Users\\me\\Desktop\\a.pdf:$pdf$2*3*128*1*2*3").unwrap();
+        assert_eq!(n.filename.as_deref(), Some("C:\\Users\\me\\Desktop\\a.pdf"));
+        assert_eq!(n.hash, "$pdf$2*3*128*1*2*3");
+    }
+
+    #[test]
+    fn handles_colons_inside_filenames() {
+        let n = normalize_hash("/tmp/weird:name.pdf:$pdf$5*6*256*..").unwrap();
+        assert_eq!(n.filename.as_deref(), Some("/tmp/weird:name.pdf"));
+        assert_eq!(n.hash, "$pdf$5*6*256*..");
     }
 
     #[test]

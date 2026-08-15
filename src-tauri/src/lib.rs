@@ -3,6 +3,7 @@ mod attack;
 mod engine;
 mod formats;
 mod gpu;
+mod logging;
 mod normalizer;
 mod strategy;
 
@@ -24,8 +25,25 @@ fn get_app_config() -> AppConfig {
 #[tauri::command]
 fn analyze_file(path: String) -> AnalyzeResult {
     match std::fs::read(Path::new(&path)) {
-        Ok(data) => analyzer::analyze(&data),
-        Err(_) => AnalyzeResult::read_error(),
+        Ok(data) => {
+            let result = analyzer::analyze(&data);
+            logging::event(
+                "analyze_file",
+                "analyze",
+                if result.ok { "ok" } else { "rejected" },
+                result.format_id.or_else(|| result.message).as_deref(),
+            );
+            result
+        }
+        Err(err) => {
+            logging::event(
+                "analyze_file",
+                "analyze",
+                "read_error",
+                Some(&err.to_string()),
+            );
+            AnalyzeResult::read_error()
+        }
     }
 }
 
@@ -42,12 +60,26 @@ fn extract_hash(path: String) -> ExtractResult {
         }
     };
     let Some(family) = analyzer::detect_family(&data) else {
+        logging::event("extract_hash", "extract", "unsupported", None);
         return ExtractResult::error("This file type is not supported by HashRecover.");
     };
     if !ACTIVE_VARIANT.supports_family(family) {
+        logging::event(
+            "extract_hash",
+            "extract",
+            "not_in_edition",
+            Some(family.id()),
+        );
         return ExtractResult::error("This format is not included in your edition of HashRecover.");
     }
-    engine::extract(family, Path::new(&path))
+    let result = engine::extract(family, Path::new(&path));
+    logging::event(
+        "extract_hash",
+        "extract",
+        if result.ok { "ok" } else { "error" },
+        result.message,
+    );
+    result
 }
 
 /// Run a recovery attempt for the given hash and strategy.
@@ -64,6 +96,7 @@ fn get_gpu_info() -> gpu::GpuInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logging::init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
