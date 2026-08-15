@@ -344,16 +344,16 @@ impl Drop for TempWorkspace {
 
 /// Locate an engine program. Checks bundled/sidecar locations first, then the
 /// system PATH. `pub` because GPU detection reuses the same lookup.
+///
+/// Bundled locations support both a flat layout (`<dir>/hashcat.exe`) and a
+/// self-contained subfolder named after the program (`<dir>/hashcat/hashcat.exe`)
+/// so the data files of Hashcat and John (both ship an `OpenCL/` tree, etc.)
+/// never clash when bundled side by side.
 pub fn resolve_program(name: &str) -> Option<PathBuf> {
     let candidates = program_names(name);
 
-    for dir in bundled_bin_dirs() {
-        for candidate in &candidates {
-            let p = dir.join(candidate);
-            if is_executable(&p) {
-                return Some(p);
-            }
-        }
+    if let Some(path) = find_program_in_dirs(&bundled_bin_dirs(), name, &candidates) {
+        return Some(path);
     }
 
     if let Ok(path) = std::env::var("PATH") {
@@ -367,6 +367,27 @@ pub fn resolve_program(name: &str) -> Option<PathBuf> {
         }
     }
 
+    None
+}
+
+/// Search the given directories for a program binary, checking both the flat
+/// layout and a subfolder named after the program.
+fn find_program_in_dirs(dirs: &[PathBuf], name: &str, candidates: &[String]) -> Option<PathBuf> {
+    for dir in dirs {
+        for candidate in candidates {
+            let p = dir.join(candidate);
+            if is_executable(&p) {
+                return Some(p);
+            }
+        }
+        let subdir = dir.join(name);
+        for candidate in candidates {
+            let p = subdir.join(candidate);
+            if is_executable(&p) {
+                return Some(p);
+            }
+        }
+    }
     None
 }
 
@@ -677,6 +698,27 @@ mod tests {
         assert_eq!(decode_password("hello"), "hello");
         assert_eq!(decode_password("$HEX[70617373776f7264]"), "password");
         assert_eq!(decode_password("$HEX[abc]"), "$HEX[abc]");
+    }
+
+    #[test]
+    fn resolves_program_in_named_subfolder() {
+        let dir = std::env::temp_dir().join(format!("hashrecover-bin-{}", std::process::id()));
+        let sub = dir.join("hashcat");
+        std::fs::create_dir_all(&sub).unwrap();
+        let exe = format!("hashcat{}", std::env::consts::EXE_SUFFIX);
+        let bin = sub.join(&exe);
+        std::fs::write(&bin, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let candidates = program_names("hashcat");
+        let found = find_program_in_dirs(&[dir.clone()], "hashcat", &candidates);
+
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(found, Some(bin));
     }
 
     fn temp_wordlist(contents: &str) -> (PathBuf, PathBuf) {
