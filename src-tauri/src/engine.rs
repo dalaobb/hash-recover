@@ -484,16 +484,18 @@ fn resolve_extractor(extractor: &str) -> Option<PathBuf> {
     #[cfg(not(debug_assertions))]
     let profile = "release";
 
+    let name = format!("{extractor}{}", std::env::consts::EXE_SUFFIX);
+
     let candidates = [
         std::env::current_dir()
             .ok()?
             .join("target")
             .join(profile)
-            .join(extractor),
+            .join(&name),
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join(profile)
-            .join(extractor),
+            .join(&name),
     ];
 
     candidates.into_iter().find(|p| is_executable(p))

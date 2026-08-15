@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Locally bundled engine binaries (hashcat, john) — never committed
+/bin
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
