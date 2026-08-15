@@ -1,50 +1,38 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { FileSelect } from "./components/FileSelect";
+import { AnalysisView } from "./components/AnalysisView";
+import { StrategySelect } from "./components/StrategySelect";
+import { ResultView } from "./components/ResultView";
+import { useRecovery } from "./store/recovery";
+import { useAppConfig } from "./lib/appConfig";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const phase = useRecovery((s) => s.phase);
+  const { data: config, isLoading } = useAppConfig();
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="flex h-full flex-col">
+      <header className="flex items-center justify-between border-b border-border bg-card px-6 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary font-bold text-bg">
+            H
+          </div>
+          <div>
+            <h1 className="text-base font-semibold leading-tight">
+              {isLoading || !config ? "HashRecover" : config.productName}
+            </h1>
+            <p className="text-xs text-text-muted">Password recovery assistant</p>
+          </div>
+        </div>
+      </header>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <main className="flex min-h-0 flex-1 flex-col">
+        {phase === "select" && <FileSelect />}
+        {phase === "analyzing" && <AnalysisView />}
+        {phase === "rejected" && <AnalysisView />}
+        {phase === "strategy" && <StrategySelect />}
+        {(phase === "running" || phase === "result") && <ResultView />}
+      </main>
+    </div>
   );
 }
 

@@ -1,0 +1,11 @@
+[package]
+name = "pdf-extractor"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "pdf-extractor"
+path = "src/main.rs"
+
+[dependencies]
+extractor-core = { path = "../core" }
