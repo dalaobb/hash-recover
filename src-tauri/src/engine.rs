@@ -6,13 +6,25 @@
 //! crashing the app, per the project's error-handling rules.
 
 use serde::Serialize;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Child, Command, Output};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
-use crate::attack;
+use crate::attack::{self, AttackFiles};
 use crate::formats::Family;
 use crate::normalizer;
 use crate::strategy::{RecoverRequest, RecoverResult, StrategyKind};
+
+/// Handle of the engine process currently running, so the user can cancel a
+/// recovery attempt from the UI.
+static ACTIVE_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+/// Set when the user cancels; `recover` checks it between engine runs.
+static CANCELLED: AtomicBool = AtomicBool::new(false);
+/// Serializes recovery attempts so at most one engine process runs at a time
+/// (hashcat instances contend for the same OpenCL device).
+static RUN_LOCK: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // Public extractor contract
@@ -26,6 +38,10 @@ pub struct ExtractResult {
     pub hashes: Vec<String>,
     /// User-facing failure message when `ok` is false.
     pub message: Option<&'static str>,
+    /// Friendly encryption name (e.g. "AES-256") shown on the file card.
+    pub encryption: Option<String>,
+    /// "Easy", "Medium" or "Hard", shown on the file card.
+    pub difficulty: Option<&'static str>,
 }
 
 fn unavailable() -> ExtractResult {
@@ -33,6 +49,8 @@ fn unavailable() -> ExtractResult {
         ok: false,
         hashes: Vec::new(),
         message: Some("Recovery engine unavailable. Please reinstall HashRecover."),
+        encryption: None,
+        difficulty: None,
     }
 }
 
@@ -42,6 +60,8 @@ impl ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some(message),
+            encryption: None,
+            difficulty: None,
         }
     }
 }
@@ -57,6 +77,9 @@ impl ExtractResult {
 /// If Hashcat rejects the hash ("No hashes loaded.") or cannot run, John is
 /// tried as a fallback. A hash with no Hashcat mode goes straight to John.
 pub fn recover(request: RecoverRequest) -> RecoverResult {
+    let _run_guard = RUN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    CANCELLED.store(false, Ordering::SeqCst);
+
     let normalized = match normalizer::normalize_hash(&request.hash) {
         Ok(n) => n,
         Err(_) => {
@@ -66,29 +89,6 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
         }
     };
 
-    let wordlist = if strategy_needs_wordlist(request.strategy.kind) {
-        let direct = request
-            .strategy
-            .options
-            .dictionary
-            .as_deref()
-            .and_then(resolve_dictionary);
-        direct.or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY))
-    } else {
-        None
-    };
-    let rules = if matches!(request.strategy.kind, StrategyKind::Pattern) {
-        resolve_rules(attack::DEFAULT_RULES)
-    } else {
-        None
-    };
-
-    let attack_args =
-        match attack::build_attack(&request.strategy, wordlist.as_deref(), rules.as_deref()) {
-            Ok(a) => a,
-            Err(e) => return RecoverResult::error(e.friendly()),
-        };
-
     let workspace = match TempWorkspace::new() {
         Some(ws) => ws,
         None => {
@@ -97,6 +97,20 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
             )
         }
     };
+
+    let files = match prepare_attack_files(&request, &workspace) {
+        Ok(files) => files,
+        Err(e) => return RecoverResult::error(e.friendly()),
+    };
+    if cancelled() {
+        return RecoverResult::cancelled();
+    }
+
+    let attack_args = match attack::build_attack(&request.strategy, &files) {
+        Ok(a) => a,
+        Err(e) => return RecoverResult::error(e.friendly()),
+    };
+
     let Some(hashcat_file) = workspace.write("hash.txt", &normalized.hash) else {
         return RecoverResult::error("Could not prepare the password hash for recovery.");
     };
@@ -110,6 +124,16 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
                 // NoHashesLoaded / Error: fall through and let John try.
                 _ => {}
             }
+        }
+        if cancelled() {
+            return RecoverResult::cancelled();
+        }
+        // The combinator attack has no John fallback; if Hashcat did not
+        // succeed it is simply unavailable.
+        if matches!(request.strategy.kind, StrategyKind::Combinator) {
+            return RecoverResult::error(
+                "Recovery engine unavailable. Please reinstall HashRecover.",
+            );
         }
     }
 
@@ -137,14 +161,112 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
         }
     }
 
+    if cancelled() {
+        return RecoverResult::cancelled();
+    }
     RecoverResult::error("Recovery engine unavailable. Please reinstall HashRecover.")
 }
 
-fn strategy_needs_wordlist(kind: StrategyKind) -> bool {
-    matches!(
-        kind,
-        StrategyKind::Dictionary | StrategyKind::Partial | StrategyKind::Pattern
-    )
+/// Resolve the wordlist/rules files a strategy needs. Historical passwords
+/// and combinator parts are materialized as temporary wordlists so the
+/// engines receive plain files; everything else resolves to a bundled or
+/// user-supplied dictionary.
+fn prepare_attack_files(
+    request: &RecoverRequest,
+    workspace: &TempWorkspace,
+) -> Result<AttackFiles, attack::AttackError> {
+    let options = &request.strategy.options;
+
+    let wordlist: Option<PathBuf>;
+    let mut wordlist_second: Option<PathBuf> = None;
+    let rules: Option<PathBuf>;
+
+    match request.strategy.kind {
+        StrategyKind::Dictionary => {
+            wordlist = options
+                .dictionary
+                .as_deref()
+                .and_then(resolve_dictionary)
+                .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY));
+            rules = None;
+        }
+        StrategyKind::Partial => {
+            wordlist = resolve_dictionary(attack::DEFAULT_DICTIONARY);
+            rules = None;
+        }
+        StrategyKind::Pattern => {
+            wordlist = match options.history.as_deref() {
+                Some(text) if !text.trim().is_empty() => {
+                    workspace.write("history.txt", &normalize_wordlist(text))
+                }
+                _ => options
+                    .dictionary
+                    .as_deref()
+                    .and_then(resolve_dictionary)
+                    .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY)),
+            };
+            rules = resolve_rules(attack::DEFAULT_RULES);
+        }
+        StrategyKind::Combinator => {
+            wordlist = options
+                .part_a
+                .as_deref()
+                .and_then(|text| workspace.write("part_a.txt", &normalize_wordlist(text)));
+            wordlist_second = options
+                .part_b
+                .as_deref()
+                .and_then(|text| workspace.write("part_b.txt", &normalize_wordlist(text)));
+            rules = None;
+        }
+        StrategyKind::Bruteforce => {
+            wordlist = None;
+            rules = None;
+        }
+    }
+
+    Ok(AttackFiles {
+        wordlist,
+        wordlist_second,
+        rules,
+    })
+}
+
+/// Trim blank lines from user-entered password lists (one password per line).
+fn normalize_wordlist(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn cancelled() -> bool {
+    CANCELLED.load(Ordering::SeqCst)
+}
+
+/// Cancel the recovery attempt in progress: flag the engine layer and kill
+/// the running child process if there is one.
+pub fn cancel_recovery() {
+    CANCELLED.store(true, Ordering::SeqCst);
+    if let Ok(mut guard) = ACTIVE_CHILD.lock() {
+        if let Some(child) = guard.as_mut() {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// Spawn a process while registering it as the cancellable active child.
+fn spawn_tracked(cmd: &mut Command) -> io::Result<Output> {
+    // `spawn` alone inherits stdio; `wait_with_output` needs pipes to capture.
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = cmd.spawn()?;
+    {
+        let mut guard = ACTIVE_CHILD.lock().unwrap();
+        *guard = Some(child);
+    }
+    let child = ACTIVE_CHILD.lock().unwrap().take().unwrap();
+    child.wait_with_output()
 }
 
 fn ok_result(password: String) -> RecoverResult {
@@ -152,6 +274,7 @@ fn ok_result(password: String) -> RecoverResult {
         ok: true,
         password: Some(password),
         message: None,
+        cancelled: false,
     }
 }
 
@@ -160,6 +283,7 @@ fn not_found() -> RecoverResult {
         ok: false,
         password: None,
         message: None,
+        cancelled: false,
     }
 }
 
@@ -182,15 +306,15 @@ fn run_hashcat(
     hash_file: &Path,
     attack_args: &[String],
 ) -> HashcatOutcome {
-    let output = std::process::Command::new(binary)
-        .arg("-m")
+    let mut cmd = std::process::Command::new(binary);
+    cmd.arg("-m")
         .arg(mode.to_string())
         .arg(hash_file)
         .args(attack_args)
         .arg("--potfile-disable")
         .arg("--restore-disable")
-        .arg("--quiet")
-        .output();
+        .arg("--quiet");
+    let output = spawn_tracked(&mut cmd);
     let output = match output {
         Ok(out) => out,
         Err(_) => return HashcatOutcome::Error,
@@ -245,21 +369,21 @@ fn run_john(
     attack_args: &[String],
     display_name: &str,
 ) -> JohnOutcome {
-    let run = std::process::Command::new(binary)
-        .arg(format!("--format={format}"))
+    let mut run = std::process::Command::new(binary);
+    run.arg(format!("--format={format}"))
         .arg(format!("--pot={}", pot_file.display()))
         .args(attack_args)
-        .arg(hash_file)
-        .output();
+        .arg(hash_file);
+    let run = spawn_tracked(&mut run);
     if run.is_err() {
         return JohnOutcome::Error;
     }
 
-    let show = std::process::Command::new(binary)
-        .arg("--show")
+    let mut show = std::process::Command::new(binary);
+    show.arg("--show")
         .arg(format!("--pot={}", pot_file.display()))
-        .arg(hash_file)
-        .output();
+        .arg(hash_file);
+    let show = spawn_tracked(&mut show);
     let show = match show {
         Ok(out) => out,
         Err(_) => return JohnOutcome::Error,
@@ -470,6 +594,11 @@ fn wordlist_dirs() -> Vec<PathBuf> {
 }
 
 /// Resolve a rule set by name (e.g. `best64` -> `rules/best64.rule`).
+///
+/// A literal path wins; otherwise a bundled `rules/` tree is searched, then
+/// the `rules/` trees shipped inside the Hashcat and John installs (the
+/// engines always bundle `best64.rule` themselves, so no separate copy is
+/// needed).
 fn resolve_rules(name: &str) -> Option<PathBuf> {
     let p = PathBuf::from(name);
     if p.is_file() {
@@ -483,6 +612,10 @@ fn resolve_rules(name: &str) -> Option<PathBuf> {
     if let Some(root) = resource_root() {
         dirs.push(root.join("rules"));
     }
+    for dir in engine_data_dirs() {
+        dirs.push(dir.join("rules"));
+        dirs.push(dir.join("run").join("rules"));
+    }
     for dir in dirs {
         let candidate = dir.join(format!("{stem}.rule"));
         if candidate.is_file() {
@@ -490,6 +623,32 @@ fn resolve_rules(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Directories that may hold an engine binary or its data tree. Used to find
+/// rule sets and wordlists shipped with Hashcat/John rather than bundling a
+/// second copy.
+fn engine_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for base in bundled_bin_dirs() {
+        dirs.push(base.clone());
+        dirs.push(base.join("hashcat"));
+        dirs.push(base.join("john"));
+        dirs.push(base.join("run"));
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            dirs.push(dir.clone());
+            dirs.push(dir.join("hashcat"));
+            dirs.push(dir.join("john"));
+            dirs.push(dir.join("run"));
+            if let Some(parent) = dir.parent() {
+                dirs.push(parent.join("share").join("hashcat"));
+                dirs.push(parent.join("share").join("john"));
+            }
+        }
+    }
+    dirs
 }
 
 // ---------------------------------------------------------------------------
@@ -562,26 +721,40 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let hashes: Vec<String> = stdout.lines().map(|l| l.to_string()).collect();
 
+    let describe = hashes
+        .first()
+        .and_then(|h| normalizer::describe_hash(h))
+        .map(|d| (Some(d.encryption), Some(d.difficulty)))
+        .unwrap_or((None, None));
+
     match output.status.code() {
         Some(0) if !hashes.is_empty() => ExtractResult {
             ok: true,
             hashes,
             message: None,
+            encryption: describe.0,
+            difficulty: describe.1,
         },
         Some(0) => ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some("No recoverable hash was found in this file."),
+            encryption: None,
+            difficulty: None,
         },
         Some(2) => ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some("This file does not appear to be password-protected."),
+            encryption: None,
+            difficulty: None,
         },
         _ => ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some("Could not extract a password hash from this file."),
+            encryption: None,
+            difficulty: None,
         },
     }
 }
@@ -656,16 +829,17 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_without_wordlist_is_friendly() {
-        // "common" is not bundled in this dev checkout, so this must degrade
-        // with a friendly message rather than a raw process error.
+    fn unknown_dictionary_falls_back_to_bundled_wordlist() {
+        // An unknown custom dictionary falls back to the bundled default
+        // instead of failing hard. Without an engine on PATH this still ends
+        // in a friendly "engine unavailable" message, never a raw error.
         let request = RecoverRequest {
             file_path: "x.pdf".into(),
             hash: "$pdf$5*6*256*1*2*3".into(),
             strategy: RecoveryStrategy {
                 kind: StrategyKind::Dictionary,
                 options: StrategyOptions {
-                    dictionary: Some("common".into()),
+                    dictionary: Some("no-such-dictionary".into()),
                     ..Default::default()
                 },
             },
@@ -674,8 +848,58 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(
             result.message,
-            Some("The word list is not available. Please reinstall HashRecover.")
+            Some("Recovery engine unavailable. Please reinstall HashRecover.")
         );
+    }
+
+    #[test]
+    fn bundled_default_dictionary_resolves() {
+        assert!(
+            resolve_dictionary(attack::DEFAULT_DICTIONARY).is_some(),
+            "default dictionary must be resolvable"
+        );
+    }
+
+    #[test]
+    fn history_passwords_are_materialized_as_wordlist() {
+        let request = RecoverRequest {
+            file_path: "x.pdf".into(),
+            hash: "$pdf$5*6*256*1*2*3".into(),
+            strategy: RecoveryStrategy {
+                kind: StrategyKind::Pattern,
+                options: StrategyOptions {
+                    history: Some(" pass \n\nword2 \n".into()),
+                    ..Default::default()
+                },
+            },
+        };
+        let ws = TempWorkspace::new().unwrap();
+        let files = prepare_attack_files(&request, &ws).unwrap();
+        let wl = files.wordlist.unwrap();
+        let contents = std::fs::read_to_string(&wl).unwrap();
+        assert_eq!(contents, "pass\nword2");
+    }
+
+    #[test]
+    fn combinator_materializes_both_parts() {
+        let request = RecoverRequest {
+            file_path: "x.pdf".into(),
+            hash: "$pdf$5*6*256*1*2*3".into(),
+            strategy: RecoveryStrategy {
+                kind: StrategyKind::Combinator,
+                options: StrategyOptions {
+                    part_a: Some("alpha\nbeta".into()),
+                    part_b: Some("01\n02".into()),
+                    ..Default::default()
+                },
+            },
+        };
+        let ws = TempWorkspace::new().unwrap();
+        let files = prepare_attack_files(&request, &ws).unwrap();
+        let a = std::fs::read_to_string(files.wordlist.unwrap()).unwrap();
+        let b = std::fs::read_to_string(files.wordlist_second.unwrap()).unwrap();
+        assert_eq!(a, "alpha\nbeta");
+        assert_eq!(b, "01\n02");
     }
 
     #[test]

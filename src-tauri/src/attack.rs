@@ -11,8 +11,9 @@
 //! | Partial    | `-a 6 <dict> <mask>`  | `--wordlist --mask` (hybrid)  |
 //! | Pattern    | `-a 0 <dict> -r <r>`  | `--wordlist --rules`          |
 //! | Bruteforce | `-a 3 <mask> -i`      | `--mask` (+ length limits)    |
+//! | Combinator | `-a 1 <listA> <listB>`| (unsupported, Hashcat only)   |
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::strategy::{RecoveryStrategy, StrategyKind};
 
@@ -51,27 +52,45 @@ pub struct Attack {
     pub john_args: Vec<String>,
 }
 
+/// Files the strategy needs (resolved by the engine layer before building the
+/// attack). The combinator attack consumes two wordlists.
+#[derive(Debug, Default)]
+pub struct AttackFiles {
+    pub wordlist: Option<PathBuf>,
+    pub wordlist_second: Option<PathBuf>,
+    pub rules: Option<PathBuf>,
+}
+
 /// Build the engine arguments for a strategy. The caller resolves the
 /// wordlist/rules files and passes them in; only the strategy shape decides
 /// which arguments are produced.
 pub fn build_attack(
     strategy: &RecoveryStrategy,
-    wordlist: Option<&Path>,
-    rules: Option<&Path>,
+    files: &AttackFiles,
 ) -> Result<Attack, AttackError> {
     match strategy.kind {
         StrategyKind::Dictionary => {
-            let wl = wordlist.ok_or(AttackError::MissingWordlist)?;
+            let wl = files
+                .wordlist
+                .as_deref()
+                .ok_or(AttackError::MissingWordlist)?;
             Ok(Attack {
                 hashcat_args: vec!["-a".into(), "0".into(), wl_str(wl)],
                 john_args: vec![format!("--wordlist={}", wl.display())],
             })
         }
         StrategyKind::Partial => {
-            let wl = wordlist.ok_or(AttackError::MissingWordlist)?;
+            let wl = files
+                .wordlist
+                .as_deref()
+                .ok_or(AttackError::MissingWordlist)?;
             let length = strategy.options.max_length.unwrap_or(4);
-            let (mask, custom) =
-                build_mask(strategy.options.charset.as_deref().unwrap_or(""), length);
+            let (mask, custom) = build_mask(
+                strategy.options.charset.as_deref().unwrap_or(""),
+                length,
+                "",
+                "",
+            );
             let (mut hashcat_args, mut john_args) = (Vec::new(), Vec::new());
             hashcat_args.extend(["-a".into(), "6".into(), wl_str(wl)]);
             if let Some(chars) = &custom {
@@ -90,8 +109,11 @@ pub fn build_attack(
             })
         }
         StrategyKind::Pattern => {
-            let wl = wordlist.ok_or(AttackError::MissingWordlist)?;
-            let rules = rules.ok_or(AttackError::MissingRules)?;
+            let wl = files
+                .wordlist
+                .as_deref()
+                .ok_or(AttackError::MissingWordlist)?;
+            let rules = files.rules.as_deref().ok_or(AttackError::MissingRules)?;
             Ok(Attack {
                 hashcat_args: vec![
                     "-a".into(),
@@ -107,8 +129,12 @@ pub fn build_attack(
             let min = strategy.options.min_length.unwrap_or(1);
             let max = strategy.options.max_length.unwrap_or(8);
             let length = max.max(min);
-            let (mask, custom) =
-                build_mask(strategy.options.charset.as_deref().unwrap_or(""), length);
+            let (mask, custom) = build_mask(
+                strategy.options.charset.as_deref().unwrap_or(""),
+                length,
+                strategy.options.prefix.as_deref().unwrap_or(""),
+                strategy.options.suffix.as_deref().unwrap_or(""),
+            );
             let (mut hashcat_args, mut john_args) = (Vec::new(), Vec::new());
             hashcat_args.extend(["-a".into(), "3".into()]);
             if let Some(chars) = &custom {
@@ -134,11 +160,40 @@ pub fn build_attack(
                 john_args,
             })
         }
+        StrategyKind::Combinator => {
+            let a = files
+                .wordlist
+                .as_deref()
+                .ok_or(AttackError::MissingWordlist)?;
+            let b = files
+                .wordlist_second
+                .as_deref()
+                .ok_or(AttackError::MissingWordlist)?;
+            // John has no combinator mode; this attack is Hashcat-only.
+            Ok(Attack {
+                hashcat_args: vec!["-a".into(), "1".into(), wl_str(a), wl_str(b)],
+                john_args: Vec::new(),
+            })
+        }
     }
 }
 
 fn wl_str(wl: &Path) -> String {
     wl.display().to_string()
+}
+
+/// Escape a literal mask prefix/suffix so hashcat/john treat `?` and `\` as
+/// plain characters rather than mask syntax.
+fn mask_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '?' => out.push_str("\\?"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Map a friendly charset name to a mask atom and, for a literal charset
@@ -158,9 +213,19 @@ fn mask_atom(charset: &str) -> (String, Option<String>) {
 }
 
 /// Build a mask of the given length plus any custom charset to register.
-fn build_mask(charset: &str, length: usize) -> (String, Option<String>) {
+/// Optional literal prefix/suffix are baked into the mask so the user's
+/// remembered characters are fixed around the wildcard positions.
+fn build_mask(
+    charset: &str,
+    length: usize,
+    prefix: &str,
+    suffix: &str,
+) -> (String, Option<String>) {
     let (atom, custom) = mask_atom(charset);
-    (atom.repeat(length), custom)
+    let mut mask = mask_literal(prefix);
+    mask.push_str(&atom.repeat(length));
+    mask.push_str(&mask_literal(suffix));
+    (mask, custom)
 }
 
 #[cfg(test)]
@@ -170,6 +235,18 @@ mod tests {
 
     fn strategy(kind: StrategyKind, options: StrategyOptions) -> RecoveryStrategy {
         RecoveryStrategy { kind, options }
+    }
+
+    fn files(
+        wordlist: Option<&str>,
+        wordlist_second: Option<&str>,
+        rules: Option<&str>,
+    ) -> AttackFiles {
+        AttackFiles {
+            wordlist: wordlist.map(PathBuf::from),
+            wordlist_second: wordlist_second.map(PathBuf::from),
+            rules: rules.map(PathBuf::from),
+        }
     }
 
     #[test]
@@ -182,8 +259,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            Some(Path::new("/wl.txt")),
-            None,
+            &files(Some("/wl.txt"), None, None),
         )
         .unwrap();
         assert_eq!(a.hashcat_args, ["-a", "0", "/wl.txt"]);
@@ -194,8 +270,7 @@ mod tests {
     fn dictionary_without_wordlist_is_missing() {
         let r = build_attack(
             &strategy(StrategyKind::Dictionary, Default::default()),
-            None,
-            None,
+            &AttackFiles::default(),
         );
         assert!(matches!(r, Err(AttackError::MissingWordlist)));
     }
@@ -212,8 +287,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            None,
-            None,
+            &AttackFiles::default(),
         )
         .unwrap();
         assert_eq!(
@@ -234,6 +308,47 @@ mod tests {
     }
 
     #[test]
+    fn prefix_and_suffix_are_baked_into_mask() {
+        let a = build_attack(
+            &strategy(
+                StrategyKind::Bruteforce,
+                StrategyOptions {
+                    min_length: Some(4),
+                    max_length: Some(4),
+                    charset: Some("digit".into()),
+                    prefix: Some("ab?c".into()),
+                    suffix: Some("!".into()),
+                    ..Default::default()
+                },
+            ),
+            &AttackFiles::default(),
+        )
+        .unwrap();
+        assert!(a.hashcat_args.contains(&"ab\\?c?d?d?d?d!".to_string()));
+        assert!(a.john_args.contains(&"--mask=ab\\?c?d?d?d?d!".to_string()));
+    }
+
+    #[test]
+    fn combinator_uses_both_lists() {
+        let a = build_attack(
+            &strategy(StrategyKind::Combinator, Default::default()),
+            &files(Some("/a.txt"), Some("/b.txt"), None),
+        )
+        .unwrap();
+        assert_eq!(a.hashcat_args, ["-a", "1", "/a.txt", "/b.txt"]);
+        assert!(a.john_args.is_empty());
+    }
+
+    #[test]
+    fn combinator_requires_both_lists() {
+        let r = build_attack(
+            &strategy(StrategyKind::Combinator, Default::default()),
+            &files(Some("/a.txt"), None, None),
+        );
+        assert!(matches!(r, Err(AttackError::MissingWordlist)));
+    }
+
+    #[test]
     fn custom_charset_becomes_question_one() {
         let a = build_attack(
             &strategy(
@@ -245,8 +360,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            None,
-            None,
+            &AttackFiles::default(),
         )
         .unwrap();
         assert!(a.hashcat_args.contains(&"-1".to_string()));
@@ -267,8 +381,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            None,
-            None,
+            &AttackFiles::default(),
         )
         .unwrap();
         assert!(a.hashcat_args.contains(&"?d?d?d?d".to_string()));
@@ -278,8 +391,7 @@ mod tests {
     fn pattern_requires_rules() {
         let r = build_attack(
             &strategy(StrategyKind::Pattern, Default::default()),
-            Some(Path::new("/wl.txt")),
-            None,
+            &files(Some("/wl.txt"), None, None),
         );
         assert!(matches!(r, Err(AttackError::MissingRules)));
     }
@@ -295,8 +407,7 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            Some(Path::new("/wl.txt")),
-            None,
+            &files(Some("/wl.txt"), None, None),
         )
         .unwrap();
         assert_eq!(a.hashcat_args, ["-a", "6", "/wl.txt", "?l?d?l?d?l?d"]);

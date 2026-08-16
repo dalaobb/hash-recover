@@ -88,6 +88,12 @@ fn recover(request: RecoverRequest) -> RecoverResult {
     engine::recover(request)
 }
 
+/// Cancel the recovery attempt currently running in the engine layer.
+#[tauri::command]
+fn cancel_recovery() {
+    engine::cancel_recovery();
+}
+
 /// Report the compute devices Hashcat can use (for the result screen).
 #[tauri::command]
 fn get_gpu_info() -> gpu::GpuInfo {
@@ -105,6 +111,7 @@ pub fn run() {
             analyze_file,
             extract_hash,
             recover,
+            cancel_recovery,
             get_gpu_info
         ])
         .run(tauri::generate_context!())

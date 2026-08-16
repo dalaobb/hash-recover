@@ -39,6 +39,15 @@ pub struct NormalizedHash {
 #[derive(Debug)]
 pub struct NormalizeError;
 
+/// Friendly description of a hash's encryption and expected difficulty,
+/// shown on the file-info card so users never see raw hash internals.
+#[derive(Debug, Clone)]
+pub struct HashDescription {
+    pub encryption: String,
+    /// One of "Easy", "Medium", "Hard".
+    pub difficulty: &'static str,
+}
+
 const JOHN_FORMAT_PDF: &str = "pdf";
 const JOHN_FORMAT_OFFICE: &str = "office";
 const JOHN_FORMAT_OLDOFFICE: &str = "oldoffice";
@@ -115,6 +124,47 @@ pub fn normalize_hash(input: &str) -> Result<NormalizedHash, NormalizeError> {
         } else {
             Engine::John
         },
+    })
+}
+
+/// Describe a hash for display: the encryption algorithm and a rough
+/// difficulty. Unknown or malformed hashes yield `None`.
+pub fn describe_hash(input: &str) -> Option<HashDescription> {
+    let normalized = normalize_hash(input).ok()?;
+    let mode = normalized.hashcat_mode;
+    let t = tag(&normalized.hash)?;
+
+    let (encryption, difficulty): (&str, &'static str) = match t {
+        "pdf" => match mode {
+            Some(10400) => ("RC4-40", "Easy"),
+            Some(10500) => ("RC4-128", "Easy"),
+            None => ("AES-128", "Medium"),
+            Some(10600) | Some(10700) => ("AES-256", "Hard"),
+            _ => return None,
+        },
+        "office" => match mode {
+            Some(9400) => ("Office 2007", "Easy"),
+            Some(9500) => ("Office 2010", "Medium"),
+            Some(9600) => ("Office 2013+", "Hard"),
+            _ => return None,
+        },
+        "oldoffice" => match mode {
+            Some(9700) => ("Office MD5 + RC4", "Easy"),
+            Some(9800) => ("Office SHA-1 + RC4", "Medium"),
+            None => ("Office SHA-512 + RC4", "Hard"),
+            _ => return None,
+        },
+        "zip2" => ("ZIP 2.0 (traditional)", "Easy"),
+        "zip3" => ("ZIP AES", "Hard"),
+        "rar3" | "RAR3" => ("RAR 3", "Medium"),
+        "rar5" | "RAR5" => ("RAR 5", "Hard"),
+        "7z" => ("7-Zip AES", "Hard"),
+        _ => return None,
+    };
+
+    Some(HashDescription {
+        encryption: encryption.to_string(),
+        difficulty,
     })
 }
 
@@ -352,5 +402,22 @@ mod tests {
         assert!(normalize_hash("plain text").is_err());
         assert!(normalize_hash("").is_err());
         assert!(normalize_hash("not:$a$b").is_err());
+    }
+
+    #[test]
+    fn describe_hash_maps_encryption_and_difficulty() {
+        let pdf = describe_hash("$pdf$5*6*256*..").unwrap();
+        assert_eq!(pdf.encryption, "AES-256");
+        assert_eq!(pdf.difficulty, "Hard");
+
+        let zip2 = describe_hash("a.zip:$zip2$*0*..").unwrap();
+        assert_eq!(zip2.encryption, "ZIP 2.0 (traditional)");
+        assert_eq!(zip2.difficulty, "Easy");
+
+        let office = describe_hash("$office$*2010*100000*128*16*..").unwrap();
+        assert_eq!(office.encryption, "Office 2010");
+        assert_eq!(office.difficulty, "Medium");
+
+        assert!(describe_hash("$crypto$*..").is_none());
     }
 }

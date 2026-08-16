@@ -19,6 +19,10 @@ export function runRecovery(request: RecoverRequest): Promise<RecoverResult> {
   return invoke<RecoverResult>("recover", { request });
 }
 
+export function cancelRecovery(): Promise<void> {
+  return invoke<void>("cancel_recovery");
+}
+
 export function getGpuInfo(): Promise<GpuInfo> {
   return invoke<GpuInfo>("get_gpu_info");
 }

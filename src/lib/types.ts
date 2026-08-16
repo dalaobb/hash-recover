@@ -11,15 +11,29 @@ export interface ExtractResult {
   ok: boolean;
   hashes: string[];
   message: string | null;
+  /** Friendly encryption name (e.g. "AES-256"), shown on the file card. */
+  encryption: string | null;
+  /** "Easy", "Medium" or "Hard", shown on the file card. */
+  difficulty: string | null;
 }
 
-export type StrategyKind = "dictionary" | "partial" | "pattern" | "bruteforce";
+export type StrategyKind = "dictionary" | "partial" | "pattern" | "bruteforce" | "combinator";
 
 export interface StrategyOptions {
   minLength?: number;
   maxLength?: number;
   charset?: string;
   dictionary?: string;
+  /** Literal prefix baked into the mask (remembered part of the password). */
+  prefix?: string;
+  /** Literal suffix baked into the mask. */
+  suffix?: string;
+  /** Multiline historical passwords used as the pattern attack wordlist. */
+  history?: string;
+  /** First part list for the combinator attack. */
+  partA?: string;
+  /** Second part list for the combinator attack. */
+  partB?: string;
 }
 
 export interface RecoveryStrategy {
@@ -37,6 +51,8 @@ export interface RecoverResult {
   ok: boolean;
   password: string | null;
   message: string | null;
+  /** True when the user cancelled the attempt. */
+  cancelled: boolean;
 }
 
 export type DeviceKind = "gpu" | "cpu" | "other";

@@ -16,6 +16,20 @@
     "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --color-bg: #f4f6f8;
+  --color-card: #ffffff;
+  --color-card-hover: #eef1f5;
+  --color-border: #dbe1ea;
+  --color-text: #1f2937;
+  --color-text-muted: #64748b;
+  color-scheme: light;
+}
+
 html,
 body,
 #root {

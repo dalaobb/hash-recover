@@ -13,6 +13,8 @@ pub enum StrategyKind {
     Partial,
     Pattern,
     Bruteforce,
+    /// Two text lists combined into every pairing (`hashcat -a 1`).
+    Combinator,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -22,6 +24,16 @@ pub struct StrategyOptions {
     pub max_length: Option<usize>,
     pub charset: Option<String>,
     pub dictionary: Option<String>,
+    /// Literal prefix baked into the mask (remembered part of the password).
+    pub prefix: Option<String>,
+    /// Literal suffix baked into the mask.
+    pub suffix: Option<String>,
+    /// Multiline historical passwords used as the pattern attack wordlist.
+    pub history: Option<String>,
+    /// First part list for the combinator attack.
+    pub part_a: Option<String>,
+    /// Second part list for the combinator attack.
+    pub part_b: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -48,6 +60,9 @@ pub struct RecoverResult {
     pub ok: bool,
     pub password: Option<String>,
     pub message: Option<&'static str>,
+    /// True when the user cancelled the attempt; the UI returns to the
+    /// previous step instead of showing a failure.
+    pub cancelled: bool,
 }
 
 impl RecoverResult {
@@ -56,6 +71,16 @@ impl RecoverResult {
             ok: false,
             password: None,
             message: Some(message),
+            cancelled: false,
+        }
+    }
+
+    pub fn cancelled() -> RecoverResult {
+        RecoverResult {
+            ok: false,
+            password: None,
+            message: None,
+            cancelled: true,
         }
     }
 }
@@ -73,6 +98,7 @@ mod tests {
                 max_length: Some(8),
                 charset: Some("abcdef0123456789".into()),
                 dictionary: None,
+                ..Default::default()
             },
         };
         let json = serde_json::to_string(&strategy).unwrap();
