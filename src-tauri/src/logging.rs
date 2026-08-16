@@ -19,7 +19,9 @@ pub fn init() {
     builder.format(format_json).init();
 }
 
-/// Emit a structured event: `{timestamp, module, event, status, detail}`.
+/// Emit a structured event: `{module, event, status, detail}`. The formatter
+/// merges these fields into the top-level record and pretty-prints it, so no
+/// nested/escaped JSON string appears in the output.
 pub fn event(module: &str, event: &str, status: &str, detail: Option<&str>) {
     log::info!(
         "{}",
@@ -37,11 +39,30 @@ fn format_json(buf: &mut env_logger::fmt::Formatter, record: &log::Record) -> st
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let line = serde_json::json!({
+    let mut value = serde_json::json!({
         "timestamp": now,
         "level": record.level().to_string(),
-        "module": record.module_path().unwrap_or(""),
-        "message": record.args().to_string(),
     });
-    writeln!(buf, "{line}")
+    // Structured events (JSON objects from `event`) are merged into the
+    // top-level record so the fields aren't escaped inside a string. Plain
+    // messages are logged as a `message` string.
+    let message = record.args().to_string();
+    match serde_json::from_str::<serde_json::Value>(&message) {
+        Ok(serde_json::Value::Object(map)) => {
+            for (key, val) in map {
+                value[key] = val;
+            }
+        }
+        Ok(other) => {
+            value["message"] = other;
+        }
+        Err(_) => {
+            value["message"] = serde_json::Value::String(message);
+        }
+    }
+    writeln!(
+        buf,
+        "{}",
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+    )
 }
