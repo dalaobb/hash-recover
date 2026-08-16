@@ -676,13 +676,12 @@ mod windows_pause {
             if module.is_null() {
                 return None;
             }
-            // `FARPROC` is either an `isize` or a pointer depending on the
-            // windows-sys version; normalize through `usize`.
-            let address = GetProcAddress(module, name.as_ptr()) as usize;
-            if address == 0 {
-                return None;
+            // `FARPROC` is `Option<unsafe extern "system" fn()>`; unwrap it and
+            // transmute the function pointer to the typed signature.
+            match GetProcAddress(module, name.as_ptr()) {
+                Some(proc) => Some(std::mem::transmute::<_, NtSuspendFn>(proc)),
+                None => None,
             }
-            Some(std::mem::transmute::<usize, NtSuspendFn>(address))
         }
     }
 
