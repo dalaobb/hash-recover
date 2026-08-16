@@ -845,17 +845,53 @@ fn run_hashcat(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    if stdout.contains("No hashes loaded.") || stderr.contains("No hashes loaded.") {
-        return HashcatOutcome::NoHashesLoaded;
-    }
-    if let Some(password) = crack_line(&stdout) {
-        return HashcatOutcome::Cracked(password);
+    let outcome = if stdout.contains("No hashes loaded.") || stderr.contains("No hashes loaded.") {
+        HashcatOutcome::NoHashesLoaded
+    } else if let Some(password) = crack_line(&stdout) {
+        HashcatOutcome::Cracked(password)
+    } else {
+        match output.status.code() {
+            Some(0) | Some(1) => HashcatOutcome::NotFound,
+            _ => HashcatOutcome::Error,
+        }
+    };
+
+    if !matches!(outcome, HashcatOutcome::Cracked(_)) {
+        // Internal diagnostics only: log the exit code and a sanitized stderr
+        // excerpt so a hashcat fallback can be investigated. Candidate lines
+        // and hash lines are filtered out — never log passwords.
+        let excerpt = sanitize_hashcat_diagnostic(&stderr);
+        let detail = match excerpt {
+            Some(excerpt) => Some(format!("exit={:?} | {excerpt}", output.status.code())),
+            None => Some(format!("exit={:?}", output.status.code())),
+        };
+        crate::logging::event("engine", "hashcat", "not_cracked", detail.as_deref());
     }
 
-    match output.status.code() {
-        Some(0) | Some(1) => HashcatOutcome::NotFound,
-        _ => HashcatOutcome::Error,
+    outcome
+}
+
+/// Last few lines of hashcat stderr that are safe for the log. Lines carrying
+/// candidate words (`Candidates.#1....:`) or hash targets (`$...`) are dropped
+/// so no password material reaches the log; what remains is device/error/
+/// progress diagnostics.
+fn sanitize_hashcat_diagnostic(stderr: &str) -> Option<String> {
+    let kept: Vec<&str> = stderr
+        .lines()
+        .rev()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty()
+                && !trimmed.contains("Candidates.")
+                && !trimmed.contains("Hash.Target")
+                && !trimmed.contains('$')
+        })
+        .take(6)
+        .collect();
+    if kept.is_empty() {
+        return None;
     }
+    Some(kept.iter().rev().copied().collect::<Vec<_>>().join(" | "))
 }
 
 /// Find the `<hash>:<password>` line Hashcat prints when a password is found.
@@ -1561,6 +1597,22 @@ mod tests {
             &mut p
         ));
         assert_eq!(p.eta.as_deref(), Some("1 hour, 5 mins"));
+    }
+
+    #[test]
+    fn sanitize_drops_candidate_and_hash_lines() {
+        let excerpt = sanitize_hashcat_diagnostic(
+            "Hash.Target......: $pdf$5*6*256\nCandidates.#1....: password123 -> p@ssword123\nERROR: CUDA SDK 8.0 not installed",
+        )
+        .unwrap();
+        assert_eq!(excerpt, "ERROR: CUDA SDK 8.0 not installed");
+        assert!(!excerpt.contains("Candidates"));
+        assert!(!excerpt.contains('$'));
+    }
+
+    #[test]
+    fn sanitize_empty_when_only_noise() {
+        assert_eq!(sanitize_hashcat_diagnostic("Candidates.#1....: x\n"), None);
     }
 
     #[test]
