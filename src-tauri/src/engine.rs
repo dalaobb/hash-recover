@@ -426,6 +426,29 @@ pub fn cancel_recovery() {
 /// the sink and the calling thread polls `try_wait` until the process exits
 /// (killing it if the user cancelled). The child stays registered for the
 /// whole run so `cancel_recovery` and pause/resume can reach it.
+/// Hashcat 7.x resolves its OpenCL kernels, modules and shared libs from
+/// paths relative to the process working directory (defaulting to
+/// `./OpenCL/`), so launching it from any other directory fails with
+/// `./OpenCL/: No such file or directory`. Every engine child therefore runs
+/// with its own binary directory as the working directory, and hashcat's data
+/// folders are pinned through its documented environment variables.
+/// Hash/wordlist paths are absolute, so the cwd never affects attack inputs.
+fn run_from_binary_dir(cmd: &mut Command, binary: &Path) {
+    let Some(dir) = binary.parent() else {
+        return;
+    };
+    cmd.current_dir(dir);
+    for (var, subdir) in [
+        ("HASHCAT_OPENCL_KERNELS", "OpenCL"),
+        ("HASHCAT_MODULES", "modules"),
+        ("HASHCAT_LIBS", "libs"),
+    ] {
+        if dir.join(subdir).is_dir() {
+            cmd.env(var, dir.join(subdir));
+        }
+    }
+}
+
 fn spawn_tracked(
     cmd: &mut Command,
     sink: ProgressSink,
@@ -827,6 +850,7 @@ fn run_hashcat(
     commands: &mut Vec<String>,
 ) -> HashcatOutcome {
     let mut cmd = std::process::Command::new(binary);
+    run_from_binary_dir(&mut cmd, binary);
     cmd.arg("-m")
         .arg(mode.to_string())
         .arg(hash_file)
@@ -940,6 +964,7 @@ fn run_john(
     commands: &mut Vec<String>,
 ) -> JohnOutcome {
     let mut run = std::process::Command::new(binary);
+    run_from_binary_dir(&mut run, binary);
     run.arg(format!("--format={format}"))
         .arg(format!("--pot={}", pot_file.display()))
         .arg("--progress-every=1")
@@ -952,6 +977,7 @@ fn run_john(
     }
 
     let mut show = std::process::Command::new(binary);
+    run_from_binary_dir(&mut show, binary);
     show.arg("--show")
         .arg(format!("--pot={}", pot_file.display()))
         .arg(hash_file);
