@@ -150,7 +150,7 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
     // John fallback, and the only engine for Hashcat-less hashes.
     if let Some(john_format) = normalized.john_format {
         if let Some(john) = resolve_program("john") {
-            let display_name = normalized.filename.as_deref().unwrap_or("hashrecover");
+            let display_name = john_login_name(normalized.filename.as_deref());
             let john_input = format!("{display_name}:{}", normalized.hash);
             let Some(john_file) = workspace.write("john.txt", &john_input) else {
                 return RecoverResult::error("Could not prepare the password hash for recovery.");
@@ -162,7 +162,7 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
                 &john_file,
                 &pot_file,
                 &attack_args.john_args,
-                display_name,
+                &display_name,
                 &mut commands,
             ) {
                 JohnOutcome::Cracked(password) => return ok_result(password, &commands),
@@ -187,6 +187,7 @@ fn prepare_attack_files(
     workspace: &TempWorkspace,
 ) -> Result<AttackFiles, attack::AttackError> {
     let options = &request.strategy.options;
+    let file_path = Path::new(&request.file_path);
 
     let wordlist: Option<PathBuf>;
     let mut wordlist_second: Option<PathBuf> = None;
@@ -198,23 +199,26 @@ fn prepare_attack_files(
                 .dictionary
                 .as_deref()
                 .and_then(resolve_dictionary)
-                .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY));
+                .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY))
+                .and_then(|wl| prepend_filename_candidates(workspace, &wl, file_path));
             rules = None;
         }
         StrategyKind::Partial => {
-            wordlist = resolve_dictionary(attack::DEFAULT_DICTIONARY);
+            wordlist = resolve_dictionary(attack::DEFAULT_DICTIONARY)
+                .and_then(|wl| prepend_filename_candidates(workspace, &wl, file_path));
             rules = None;
         }
         StrategyKind::Pattern => {
             wordlist = match options.history.as_deref() {
-                Some(text) if !text.trim().is_empty() => {
-                    workspace.write("history.txt", &normalize_wordlist(text))
-                }
+                Some(text) if !text.trim().is_empty() => workspace
+                    .write("history.txt", &normalize_wordlist(text))
+                    .and_then(|wl| prepend_filename_candidates(workspace, &wl, file_path)),
                 _ => options
                     .dictionary
                     .as_deref()
                     .and_then(resolve_dictionary)
-                    .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY)),
+                    .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY))
+                    .and_then(|wl| prepend_filename_candidates(workspace, &wl, file_path)),
             };
             rules = resolve_rules(attack::DEFAULT_RULES);
         }
@@ -249,6 +253,75 @@ fn normalize_wordlist(text: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Last path component, independent of the OS separator, so a Windows path in
+/// a hash line behaves the same on any host.
+fn base_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// Candidate words derived from the target file's name. John's single-crack
+/// mode famously uses the login/filename as a mangling base (a file named
+/// `xxx.pdf` often has a password related to `xxx`); the app runs explicit
+/// wordlist attacks instead, so these candidates are prepended to the
+/// wordlist to keep the advantage for both engines.
+fn filename_candidates(path: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(name) = path.to_str().map(base_name) else {
+        return out;
+    };
+    if !name.is_empty() {
+        out.push(name.to_string());
+        let stem = name
+            .rsplit_once('.')
+            .map(|(stem, _)| stem)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(name);
+        if stem != name {
+            out.push(stem.to_string());
+        }
+    }
+    out
+}
+
+/// Copy a wordlist into the temp workspace with the file-name candidates
+/// first, so both engines try the name-derived words ahead of the dictionary.
+fn prepend_filename_candidates(
+    workspace: &TempWorkspace,
+    wordlist: &Path,
+    file_path: &Path,
+) -> Option<PathBuf> {
+    let candidates = filename_candidates(file_path);
+    if candidates.is_empty() {
+        return Some(wordlist.to_path_buf());
+    }
+    let contents = std::fs::read_to_string(wordlist).ok()?;
+    let mut lines = candidates;
+    for line in contents.lines() {
+        let line = line.trim();
+        if !line.is_empty() {
+            lines.push(line.to_string());
+        }
+    }
+    workspace.write("wordlist.txt", &lines.join("\n"))
+}
+
+/// A safe login name for John's `login:$hash$` input line. The raw file path
+/// is unusable here: Windows drive letters (`C:\...`) and colons inside
+/// filenames would break John's parser, which splits the line on the first
+/// `:`. The file's base name without extension is used instead, and John's
+/// `--show` output is matched against the same name.
+fn john_login_name(filename: Option<&str>) -> String {
+    let Some(name) = filename.map(base_name).filter(|s| !s.is_empty()) else {
+        return "hashrecover".into();
+    };
+    let stem = name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(name);
+    stem.to_string()
 }
 
 fn cancelled() -> bool {
@@ -913,7 +986,46 @@ mod tests {
         let files = prepare_attack_files(&request, &ws).unwrap();
         let wl = files.wordlist.unwrap();
         let contents = std::fs::read_to_string(&wl).unwrap();
-        assert_eq!(contents, "pass\nword2");
+        // The file-name candidates are prepended ahead of the history lines.
+        assert!(contents.ends_with("x.pdf\nx\npass\nword2"));
+    }
+
+    #[test]
+    fn filename_candidates_derive_base_and_stem() {
+        let windows = filename_candidates(Path::new(r"D:\Downloads\xxx.pdf"));
+        assert_eq!(windows, ["xxx.pdf", "xxx"]);
+        let simple = filename_candidates(Path::new("/tmp/notes.txt"));
+        assert_eq!(simple, ["notes.txt", "notes"]);
+        assert!(filename_candidates(Path::new("/")).is_empty());
+    }
+
+    #[test]
+    fn john_login_name_is_path_and_extension_free() {
+        // A Windows path must not leak colons into John's `login:$hash$` line.
+        assert_eq!(john_login_name(Some(r"D:\Downloads\xxx.pdf")), "xxx");
+        assert_eq!(john_login_name(Some("archive.zip")), "archive");
+        assert_eq!(john_login_name(None), "hashrecover");
+    }
+
+    #[test]
+    fn dictionary_wordlist_gets_filename_candidates_prepended() {
+        let request = RecoverRequest {
+            file_path: "/tmp/secret.pdf".into(),
+            hash: "$pdf$5*6*256*1*2*3".into(),
+            strategy: RecoveryStrategy {
+                kind: StrategyKind::Dictionary,
+                options: StrategyOptions {
+                    dictionary: Some("no-such-dictionary".into()),
+                    ..Default::default()
+                },
+            },
+        };
+        let ws = TempWorkspace::new().unwrap();
+        let files = prepare_attack_files(&request, &ws).unwrap();
+        let contents = std::fs::read_to_string(files.wordlist.unwrap()).unwrap();
+        let mut lines = contents.lines();
+        assert_eq!(lines.next(), Some("secret.pdf"));
+        assert_eq!(lines.next(), Some("secret"));
     }
 
     #[test]
