@@ -73,11 +73,13 @@ fn extract_hash(path: String) -> ExtractResult {
         return ExtractResult::error("This format is not included in your edition of HashRecover.");
     }
     let result = engine::extract(family, Path::new(&path));
+    // The extracted hash is logged for debugging (user request); it is a
+    // password hash, so this line should stay out of production telemetry.
     logging::event(
         "extract_hash",
         "extract",
         if result.ok { "ok" } else { "error" },
-        result.message,
+        result.hashes.first().map(String::as_str).or(result.message),
     );
     result
 }

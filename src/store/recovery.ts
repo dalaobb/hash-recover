@@ -138,6 +138,9 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
       });
       return;
     }
+    if (extracted.hashes.length > 0) {
+      console.log("[HashRecover] extracted hash:", extracted.hashes);
+    }
     set({
       phase: "knowledge",
       analysis,
