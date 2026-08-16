@@ -8,8 +8,9 @@
 //! | Strategy   | Hashcat               | John                          |
 //! | ---------- | --------------------- | ----------------------------- |
 //! | Dictionary | `-a 0 <wordlist>`     | `--wordlist=<file>`           |
+//! | Dictionary + rules | `-a 0 <dict> -r <r>` | `--wordlist --rules=<set>` |
 //! | Partial    | `-a 6 <dict> <mask>`  | `--wordlist --mask` (hybrid)  |
-//! | Pattern    | `-a 0 <dict> -r <r>`  | `--wordlist --rules`          |
+//! | Pattern    | `-a 0 <dict> -r <r>`  | `--wordlist --rules=<set>`    |
 //! | Bruteforce | `-a 3 <mask> -i`      | `--mask` (+ length limits)    |
 //! | Combinator | `-a 1 <listA> <listB>`| (unsupported, Hashcat only)   |
 
@@ -19,8 +20,40 @@ use crate::strategy::{RecoveryStrategy, StrategyKind};
 
 /// Default bundled dictionary used when the strategy does not name one.
 pub const DEFAULT_DICTIONARY: &str = "common";
-/// Default bundled rule set used by the pattern strategy.
-pub const DEFAULT_RULES: &str = "best64";
+/// Default variation level applied to wordlist attacks (pattern strategy).
+pub const DEFAULT_RULE_LEVEL: &str = "simple";
+
+/// Map a friendly variation level to the per-engine rule names.
+///
+/// Hashcat needs a rule *file* (`-r rules/<stem>.rule`); John needs the
+/// `[List.Rules:<name>]` section in john.conf, which `.include`s the matching
+/// `rules/<name>.rule` file — John cannot load a rule file directly.
+///
+/// The "simple" level is intentionally engine-specific: hashcat's
+/// `best66.rule` uses hashcat-only commands that John's parser rejects, so
+/// John uses its own `best64.rule`. `d3ad0ne.rule` and `dive.rule` are
+/// John-origin rule files both engines ship and both can parse, so they share
+/// a name.
+pub fn rule_names(level: &str) -> (&'static str, &'static str) {
+    match level {
+        "deep" => ("d3ad0ne", "d3ad0ne"),
+        "extreme" => ("dive", "dive"),
+        _ => ("best66", "best64"),
+    }
+}
+
+/// Hashcat rule-file stems to try for a variation level, most-preferred
+/// first. John is unaffected (it resolves the level to a john.conf rule-set
+/// name in [`rule_names`]). "simple" prefers hashcat's `best66.rule` and
+/// falls back to `best64.rule`, which both engines ship and hashcat can
+/// parse — some hashcat packages (e.g. Debian/Ubuntu) omit `best66.rule`.
+pub fn hashcat_rule_candidates(level: &str) -> &'static [&'static str] {
+    match level {
+        "deep" => &["d3ad0ne"],
+        "extreme" => &["dive"],
+        _ => &["best66", "best64"],
+    }
+}
 
 #[derive(Debug)]
 pub enum AttackError {
@@ -74,9 +107,18 @@ pub fn build_attack(
                 .wordlist
                 .as_deref()
                 .ok_or(AttackError::MissingWordlist)?;
+            let (mut hashcat_args, mut john_args) = (Vec::new(), Vec::new());
+            hashcat_args.extend(["-a".into(), "0".into(), wl_str(wl)]);
+            john_args.push(format!("--wordlist={}", wl.display()));
+            if let Some(level) = strategy.options.rule_level.as_deref() {
+                let rules = files.rules.as_deref().ok_or(AttackError::MissingRules)?;
+                let (_, john_rules) = rule_names(level);
+                hashcat_args.extend(["-r".into(), rules.display().to_string()]);
+                john_args.push(format!("--rules={john_rules}"));
+            }
             Ok(Attack {
-                hashcat_args: vec!["-a".into(), "0".into(), wl_str(wl)],
-                john_args: vec![format!("--wordlist={}", wl.display())],
+                hashcat_args,
+                john_args,
             })
         }
         StrategyKind::Partial => {
@@ -114,6 +156,12 @@ pub fn build_attack(
                 .as_deref()
                 .ok_or(AttackError::MissingWordlist)?;
             let rules = files.rules.as_deref().ok_or(AttackError::MissingRules)?;
+            let level = strategy
+                .options
+                .rule_level
+                .as_deref()
+                .unwrap_or(DEFAULT_RULE_LEVEL);
+            let (_, john_rules) = rule_names(level);
             Ok(Attack {
                 hashcat_args: vec![
                     "-a".into(),
@@ -122,7 +170,10 @@ pub fn build_attack(
                     "-r".into(),
                     rules.display().to_string(),
                 ],
-                john_args: vec![format!("--wordlist={}", wl.display()), "--rules".into()],
+                john_args: vec![
+                    format!("--wordlist={}", wl.display()),
+                    format!("--rules={john_rules}"),
+                ],
             })
         }
         StrategyKind::Bruteforce => {
@@ -267,6 +318,61 @@ mod tests {
     }
 
     #[test]
+    fn dictionary_with_rules_appends_engine_specific_rule() {
+        // "simple" maps to hashcat best66.rule (file) and john best64
+        // (john.conf rule-set section) — two different names per engine.
+        let a = build_attack(
+            &strategy(
+                StrategyKind::Dictionary,
+                StrategyOptions {
+                    dictionary: Some("common".into()),
+                    rule_level: Some("simple".into()),
+                    ..Default::default()
+                },
+            ),
+            &files(Some("/wl.txt"), None, Some("/rules/best66.rule")),
+        )
+        .unwrap();
+        assert_eq!(
+            a.hashcat_args,
+            ["-a", "0", "/wl.txt", "-r", "/rules/best66.rule"]
+        );
+        assert_eq!(a.john_args, ["--wordlist=/wl.txt", "--rules=best64"]);
+    }
+
+    #[test]
+    fn dictionary_with_rules_without_rules_file_is_missing() {
+        let r = build_attack(
+            &strategy(
+                StrategyKind::Dictionary,
+                StrategyOptions {
+                    dictionary: Some("common".into()),
+                    rule_level: Some("simple".into()),
+                    ..Default::default()
+                },
+            ),
+            &files(Some("/wl.txt"), None, None),
+        );
+        assert!(matches!(r, Err(AttackError::MissingRules)));
+    }
+
+    #[test]
+    fn rule_level_maps_to_per_engine_names() {
+        assert_eq!(rule_names("simple"), ("best66", "best64"));
+        assert_eq!(rule_names("deep"), ("d3ad0ne", "d3ad0ne"));
+        assert_eq!(rule_names("extreme"), ("dive", "dive"));
+        assert_eq!(rule_names("unknown"), ("best66", "best64"));
+    }
+
+    #[test]
+    fn simple_level_has_best64_hashcat_fallback() {
+        assert_eq!(hashcat_rule_candidates("simple"), &["best66", "best64"]);
+        assert_eq!(hashcat_rule_candidates("deep"), &["d3ad0ne"]);
+        assert_eq!(hashcat_rule_candidates("extreme"), &["dive"]);
+        assert_eq!(hashcat_rule_candidates("unknown"), &["best66", "best64"]);
+    }
+
+    #[test]
     fn dictionary_without_wordlist_is_missing() {
         let r = build_attack(
             &strategy(StrategyKind::Dictionary, Default::default()),
@@ -394,6 +500,26 @@ mod tests {
             &files(Some("/wl.txt"), None, None),
         );
         assert!(matches!(r, Err(AttackError::MissingRules)));
+    }
+
+    #[test]
+    fn pattern_uses_level_rules_for_both_engines() {
+        let a = build_attack(
+            &strategy(
+                StrategyKind::Pattern,
+                StrategyOptions {
+                    rule_level: Some("deep".into()),
+                    ..Default::default()
+                },
+            ),
+            &files(Some("/wl.txt"), None, Some("/rules/d3ad0ne.rule")),
+        )
+        .unwrap();
+        assert_eq!(
+            a.hashcat_args,
+            ["-a", "0", "/wl.txt", "-r", "/rules/d3ad0ne.rule"]
+        );
+        assert_eq!(a.john_args, ["--wordlist=/wl.txt", "--rules=d3ad0ne"]);
     }
 
     #[test]

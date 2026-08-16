@@ -133,6 +133,18 @@ const en = {
       label: "Historical passwords, one per line",
       note: "We'll try these and common variations of them (case changes, numbers, symbols, years).",
     },
+    rules: {
+      level: "How many variations to try",
+      simple: "Simple",
+      simpleDesc: "Fast — a few dozen common variations per password.",
+      deep: "Deep",
+      deepDesc: "Balanced — hundreds of variations.",
+      extreme: "Extreme",
+      extremeDesc: "Thorough — tens of thousands of variations, much slower.",
+      dictionaryToggle: "Apply password-habit variations",
+      dictionaryToggleDesc:
+        "Also try common transformations of each word (best66 rules). Slower, but catches many real-world habits.",
+    },
     partA: {
       label: "Part 1 — words or numbers you remember, one per line",
     },
@@ -365,6 +377,18 @@ const zh: typeof en = {
     history: {
       label: "历史密码，每行一个",
       note: "我们将尝试这些密码及其常见变体（大小写变化、数字、符号、年份）。",
+    },
+    rules: {
+      level: "尝试多少种变体",
+      simple: "简单",
+      simpleDesc: "快速——每个密码只做几十种常见变形。",
+      deep: "深度",
+      deepDesc: "均衡——数百种变形。",
+      extreme: "极限",
+      extremeDesc: "彻底——数万种变形，速度慢很多。",
+      dictionaryToggle: "应用密码习惯变形",
+      dictionaryToggleDesc:
+        "同时尝试每个单词的常见变形（best66 规则）。更慢，但能覆盖很多真实习惯。",
     },
     partA: {
       label: "第 1 部分——您记得的单词或数字，每行一个",

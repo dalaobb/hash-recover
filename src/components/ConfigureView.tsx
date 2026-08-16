@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useRecovery } from "../store/recovery";
+import { useRecovery, RuleLevel } from "../store/recovery";
 import {
   buildCharset,
   GROUP_CHARS,
@@ -21,6 +21,19 @@ const TABS = [
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
+
+const RULE_LEVELS: {
+  id: RuleLevel;
+  labelKey: "configure.rules.simple" | "configure.rules.deep" | "configure.rules.extreme";
+  descKey:
+    | "configure.rules.simpleDesc"
+    | "configure.rules.deepDesc"
+    | "configure.rules.extremeDesc";
+}[] = [
+  { id: "simple", labelKey: "configure.rules.simple", descKey: "configure.rules.simpleDesc" },
+  { id: "deep", labelKey: "configure.rules.deep", descKey: "configure.rules.deepDesc" },
+  { id: "extreme", labelKey: "configure.rules.extreme", descKey: "configure.rules.extremeDesc" },
+];
 
 const GROUP_KEYS: Record<GroupKey, "configure.group.lower" | "configure.group.upper" | "configure.group.digit" | "configure.group.special"> = {
   lower: "configure.group.lower",
@@ -246,6 +259,8 @@ function PartialConfig() {
   const setPartA = useRecovery((s) => s.setPartA);
   const partB = useRecovery((s) => s.partB);
   const setPartB = useRecovery((s) => s.setPartB);
+  const ruleLevel = useRecovery((s) => s.ruleLevel);
+  const setRuleLevel = useRecovery((s) => s.setRuleLevel);
   const t = useT();
 
   if (subKnowledge === "12") {
@@ -263,6 +278,36 @@ function PartialConfig() {
           className={`${inputCls} resize-y font-mono`}
         />
         <p className="text-xs text-text-muted">{t("configure.history.note")}</p>
+
+        <div className="mt-1 flex flex-col gap-1.5">
+          <span className="text-sm text-text-muted">{t("configure.rules.level")}</span>
+          <div className="flex flex-col gap-1.5">
+            {RULE_LEVELS.map((level) => {
+              const selected = ruleLevel === level.id;
+              return (
+                <label
+                  key={level.id}
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors ${
+                    selected
+                      ? "border-primary bg-card"
+                      : "border-border bg-card hover:border-primary/60"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    className="mt-0.5 accent-primary"
+                    checked={selected}
+                    onChange={() => setRuleLevel(level.id)}
+                  />
+                  <span>
+                    <span className="font-semibold">{t(level.labelKey)}</span>
+                    <span className="block text-xs text-text-muted">{t(level.descKey)}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
       </div>
     );
   }
@@ -338,6 +383,8 @@ function CommonConfig() {
   const setDictionaryChoice = useRecovery((s) => s.setDictionaryChoice);
   const customDictionaryPath = useRecovery((s) => s.customDictionaryPath);
   const setCustomDictionaryPath = useRecovery((s) => s.setCustomDictionaryPath);
+  const useRules = useRecovery((s) => s.useRules);
+  const setUseRules = useRecovery((s) => s.setUseRules);
   const t = useT();
 
   async function pickDictionary() {
@@ -395,6 +442,21 @@ function CommonConfig() {
           </button>
         </div>
       )}
+
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
+        <input
+          type="checkbox"
+          className="mt-0.5 accent-primary"
+          checked={useRules}
+          onChange={(e) => setUseRules(e.target.checked)}
+        />
+        <span>
+          <span className="font-semibold">{t("configure.rules.dictionaryToggle")}</span>
+          <span className="block text-xs text-text-muted">
+            {t("configure.rules.dictionaryToggleDesc")}
+          </span>
+        </span>
+      </label>
     </div>
   );
 }

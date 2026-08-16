@@ -34,6 +34,10 @@ pub struct StrategyOptions {
     pub part_a: Option<String>,
     /// Second part list for the combinator attack.
     pub part_b: Option<String>,
+    /// Friendly variation level driving which rule set is applied to a
+    /// wordlist attack: `simple`, `deep` or `extreme`. Maps to different
+    /// rule files per engine, so no file names cross the boundary.
+    pub rule_level: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

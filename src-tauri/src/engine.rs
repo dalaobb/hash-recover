@@ -275,7 +275,10 @@ fn prepare_attack_files(
                 .and_then(resolve_dictionary)
                 .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY))
                 .and_then(|wl| prepend_filename_candidates(workspace, &wl, file_path));
-            rules = None;
+            rules = options
+                .rule_level
+                .as_deref()
+                .and_then(resolve_hashcat_rules);
         }
         StrategyKind::Partial => {
             wordlist = resolve_dictionary(attack::DEFAULT_DICTIONARY)
@@ -294,7 +297,12 @@ fn prepare_attack_files(
                     .or_else(|| resolve_dictionary(attack::DEFAULT_DICTIONARY))
                     .and_then(|wl| prepend_filename_candidates(workspace, &wl, file_path)),
             };
-            rules = resolve_rules(attack::DEFAULT_RULES);
+            rules = resolve_hashcat_rules(
+                options
+                    .rule_level
+                    .as_deref()
+                    .unwrap_or(attack::DEFAULT_RULE_LEVEL),
+            );
         }
         StrategyKind::Combinator => {
             wordlist = options
@@ -1152,6 +1160,14 @@ fn resolve_rules(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Resolve the hashcat rule file for a variation level, trying each candidate
+/// name in order (e.g. `best66` then `best64`) until one exists.
+fn resolve_hashcat_rules(level: &str) -> Option<PathBuf> {
+    attack::hashcat_rule_candidates(level)
+        .iter()
+        .find_map(|name| resolve_rules(name))
 }
 
 /// Directories that may hold an engine binary or its data tree. Used to find

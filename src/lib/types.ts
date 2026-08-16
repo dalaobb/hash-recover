@@ -34,6 +34,9 @@ export interface StrategyOptions {
   partA?: string;
   /** Second part list for the combinator attack. */
   partB?: string;
+  /** Friendly variation level driving which rule set is applied to a
+   *  wordlist attack: "simple", "deep" or "extreme". */
+  ruleLevel?: string;
 }
 
 export interface RecoveryStrategy {

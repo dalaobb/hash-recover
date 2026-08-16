@@ -40,6 +40,8 @@ export type Knowledge = "partial" | "common" | "none";
 /** Sub-choices under "I remember part of the password". */
 export type SubKnowledge = "11" | "12" | "13";
 export type DictionaryChoice = "default" | "custom";
+/** Variation level applied to wordlist attacks (rule sets per engine). */
+export type RuleLevel = "simple" | "deep" | "extreme";
 
 interface RecoveryState {
   phase: Phase;
@@ -54,6 +56,10 @@ interface RecoveryState {
   subKnowledge: SubKnowledge | null;
   dictionaryChoice: DictionaryChoice | null;
   customDictionaryPath: string | null;
+  /** Variation level for the history-based pattern attack (default simple). */
+  ruleLevel: RuleLevel;
+  /** Apply rules (best66/best64) to the dictionary attack. */
+  useRules: boolean;
 
   maskConfig: MaskConfig;
   history: string;
@@ -73,6 +79,8 @@ interface RecoveryState {
   setSubKnowledge: (sub: SubKnowledge) => void;
   setDictionaryChoice: (choice: DictionaryChoice) => void;
   setCustomDictionaryPath: (path: string | null) => void;
+  setRuleLevel: (level: RuleLevel) => void;
+  setUseRules: (useRules: boolean) => void;
   setMaskConfig: (patch: Partial<MaskConfig>) => void;
   setCharGroup: (group: GroupKey, patch: Partial<CharGroup>) => void;
   setHistory: (text: string) => void;
@@ -96,6 +104,8 @@ const initialWizard = () => ({
   subKnowledge: null as SubKnowledge | null,
   dictionaryChoice: null as DictionaryChoice | null,
   customDictionaryPath: null as string | null,
+  ruleLevel: "simple" as RuleLevel,
+  useRules: false,
   maskConfig: defaultMaskConfig(),
   history: "",
   partA: "",
@@ -180,6 +190,10 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
 
   setCustomDictionaryPath: (path) => set({ customDictionaryPath: path }),
 
+  setRuleLevel: (ruleLevel) => set({ ruleLevel }),
+
+  setUseRules: (useRules) => set({ useRules }),
+
   setMaskConfig: (patch) => set((s) => ({ maskConfig: { ...s.maskConfig, ...patch } })),
 
   setCharGroup: (group, patch) =>
@@ -258,7 +272,15 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
 
 /** Map the wizard answers to an engine strategy. */
 function buildStrategy(state: RecoveryState): RecoveryStrategy {
-  const { knowledge, subKnowledge, dictionaryChoice, customDictionaryPath, maskConfig } = state;
+  const {
+    knowledge,
+    subKnowledge,
+    dictionaryChoice,
+    customDictionaryPath,
+    maskConfig,
+    ruleLevel,
+    useRules,
+  } = state;
 
   switch (knowledge) {
     case "partial":
@@ -277,7 +299,10 @@ function buildStrategy(state: RecoveryState): RecoveryStrategy {
           };
         }
         case "12":
-          return { kind: "pattern", options: { history: state.history } };
+          return {
+            kind: "pattern",
+            options: { history: state.history, ruleLevel },
+          };
         case "13":
           return {
             kind: "combinator",
@@ -287,10 +312,16 @@ function buildStrategy(state: RecoveryState): RecoveryStrategy {
           break;
       }
       break;
-    case "common":
-      return dictionaryChoice === "custom" && customDictionaryPath
-        ? { kind: "dictionary", options: { dictionary: customDictionaryPath } }
-        : { kind: "dictionary", options: { dictionary: "common" } };
+    case "common": {
+      const custom = dictionaryChoice === "custom" && customDictionaryPath;
+      return {
+        kind: "dictionary",
+        options: {
+          dictionary: custom ? customDictionaryPath : "common",
+          ruleLevel: useRules ? "simple" : undefined,
+        },
+      };
+    }
     case "none":
       return {
         kind: "bruteforce",
