@@ -335,6 +335,19 @@ Never expose:
 - -a 6
 - -a 7
 
+## Recovery History & Reuse
+
+Successfully recovered passwords are stored in a local `history.json` in the
+app data dir; the app is the single cache (engine potfiles stay disabled).
+Before any engine runs, the recovery pipeline checks the history by the
+normalized hash; a match answers instantly and is marked as reused in the UI.
+New recoveries are recorded on success with their file name, encryption,
+difficulty, strategy kind, engine and timestamp.
+
+The frontend exposes a recovery-history view (list of entries) with a clear
+action that deletes the store. History never leaves the device and is never
+written to logs.
+
 ## Attack Strategy Model
 
 Example:
@@ -473,8 +486,15 @@ Never:
 
 - Upload user files
 - Send hashes remotely
-- Store recovered passwords permanently
 - Collect telemetry without consent
+
+Recovered passwords are stored locally in the app's recovery history so a
+repeat attempt against the same hash is answered instantly (reuse). This is a
+deliberate, user-visible feature:
+
+- History lives only on the device (app data dir), never in logs or telemetry.
+- Structured logs must never contain recovered passwords or user file paths.
+- Users can view and clear the history at any time; clearing removes the store.
 
 ## Testing Requirements
 

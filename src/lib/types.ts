@@ -53,8 +53,47 @@ export interface RecoverResult {
   message: string | null;
   /** True when the user cancelled the attempt. */
   cancelled: boolean;
+  /** True when the password came from local recovery history (reuse). */
+  reused: boolean;
   /** The engine command lines that were invoked, for debug logging. */
   commandLines: string[];
+}
+
+/** One locally recovered password, stored for reuse and the history view. */
+export interface HistoryEntry {
+  /** Bare normalized hash (`$pdf$...`), the reuse key. */
+  hash: string;
+  /** Base file name the hash was recovered from. */
+  fileName: string;
+  /** Friendly encryption name (e.g. "AES-256"). */
+  encryption: string | null;
+  /** "Easy", "Medium" or "Hard". */
+  difficulty: string | null;
+  /** The recovered password. */
+  password: string;
+  /** Which engine found it: "hashcat", "john" or "history" (reuse). */
+  engine: string;
+  /** Strategy kind that recovered it ("dictionary", "pattern", ...). */
+  strategyKind: string;
+  /** Unix timestamp in milliseconds. */
+  recoveredAt: number;
+}
+
+/** Live progress pushed from the engine via `recovery://progress`. Every field
+ *  is optional: Hashcat reports all of them, John only percent/speed. */
+export interface RecoveryProgress {
+  /** Candidates tested so far. */
+  tried: number | null;
+  /** Total candidates in the attack. */
+  total: number | null;
+  /** Completion as 0..100. */
+  percent: number | null;
+  /** Candidate rate, e.g. "1.2 MH/s". */
+  speed: string | null;
+  /** The candidate currently being tested. */
+  candidate: string | null;
+  /** Estimated time remaining as printed by the engine. */
+  eta: string | null;
 }
 
 export type DeviceKind = "gpu" | "cpu" | "other";

@@ -6,22 +6,65 @@
 //! crashing the app, per the project's error-handling rules.
 
 use serde::Serialize;
-use std::io;
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::attack::{self, AttackFiles};
 use crate::formats::Family;
-use crate::normalizer;
+use crate::history;
+use crate::normalizer::{self, NormalizedHash};
 use crate::strategy::{RecoverRequest, RecoverResult, StrategyKind};
 
 /// Handle of the engine process currently running, so the user can cancel a
 /// recovery attempt from the UI.
 static ACTIVE_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+/// Hashcat's stdin, kept open so its native `p` key can pause/resume it.
+static ACTIVE_STDIN: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
+/// Which engine is currently running, so pause/resume picks the right action.
+static ACTIVE_SOURCE: Mutex<Option<ProgressSource>> = Mutex::new(None);
 /// Set when the user cancels; `recover` checks it between engine runs.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Live progress pushed to the UI while an engine runs. Every field is
+/// optional: Hashcat exposes tried/total/percent/speed/candidate/eta, John
+/// only percent and speed, and nothing reports all of them.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryProgress {
+    /// Candidates tested so far (Hashcat's `Progress` line).
+    pub tried: Option<u64>,
+    /// Total candidates in the attack (Hashcat's `Progress` line).
+    pub total: Option<u64>,
+    /// Completion as 0..100 (Hashcat `Progress`, John percentage).
+    pub percent: Option<f64>,
+    /// Candidate rate as printed by the engine (e.g. `1.2 MH/s`).
+    pub speed: Option<String>,
+    /// The candidate currently being tested, when the engine reports it.
+    pub candidate: Option<String>,
+    /// Estimated time remaining, as printed by the engine.
+    pub eta: Option<String>,
+}
+
+/// A shareable sink for progress events. The UI passes one in; the engine
+/// calls it from its stdout/stderr reader threads.
+pub type ProgressSink = Arc<dyn Fn(&RecoveryProgress) + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProgressSource {
+    Hashcat,
+    John,
+}
+
+/// Captured process output, collected while progress is streamed.
+struct TrackedOutput {
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
 /// Serializes recovery attempts so at most one engine process runs at a time
 /// (hashcat instances contend for the same OpenCL device).
 static RUN_LOCK: Mutex<()> = Mutex::new(());
@@ -76,7 +119,24 @@ impl ExtractResult {
 /// Engine selection: Hashcat runs first whenever a mode exists for the hash.
 /// If Hashcat rejects the hash ("No hashes loaded.") or cannot run, John is
 /// tried as a fallback. A hash with no Hashcat mode goes straight to John.
+///
+/// `recover` is the test-facing convenience wrapper; the Tauri command uses
+/// `recover_with_sink` to stream progress events to the UI.
+#[allow(dead_code)]
 pub fn recover(request: RecoverRequest) -> RecoverResult {
+    recover_with_sink(request, Arc::new(|_| {}), None)
+}
+
+/// `recover` with a sink for live progress events. The sink runs on the
+/// engine's stdout/stderr reader threads while the process is alive.
+///
+/// `history_dir` is the app data dir where recovered passwords are stored for
+/// reuse; a `None` skips both the history lookup and recording.
+pub fn recover_with_sink(
+    request: RecoverRequest,
+    sink: ProgressSink,
+    history_dir: Option<&Path>,
+) -> RecoverResult {
     let _run_guard = RUN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     CANCELLED.store(false, Ordering::SeqCst);
 
@@ -88,6 +148,12 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
             )
         }
     };
+
+    // A previous recovery already found this password: answer instantly.
+    if let Some(entry) = history_dir.and_then(|dir| history::find(dir, &normalized.hash)) {
+        crate::logging::event("recover", "recover", "reused", None);
+        return reused_result(entry.password);
+    }
 
     let workspace = match TempWorkspace::new() {
         Some(ws) => ws,
@@ -127,9 +193,13 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
                 mode,
                 &hashcat_file,
                 &attack_args.hashcat_args,
+                sink.clone(),
                 &mut commands,
             ) {
-                HashcatOutcome::Cracked(password) => return ok_result(password, &commands),
+                HashcatOutcome::Cracked(password) => {
+                    record_history(history_dir, &request, &normalized, "hashcat", &password);
+                    return ok_result(password, &commands);
+                }
                 HashcatOutcome::NotFound => return not_found(&commands),
                 // NoHashesLoaded / Error: fall through and let John try.
                 _ => {}
@@ -163,9 +233,13 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
                 &pot_file,
                 &attack_args.john_args,
                 &display_name,
+                sink.clone(),
                 &mut commands,
             ) {
-                JohnOutcome::Cracked(password) => return ok_result(password, &commands),
+                JohnOutcome::Cracked(password) => {
+                    record_history(history_dir, &request, &normalized, "john", &password);
+                    return ok_result(password, &commands);
+                }
                 JohnOutcome::NotFound => return not_found(&commands),
                 JohnOutcome::Error => {}
             }
@@ -339,19 +413,302 @@ pub fn cancel_recovery() {
     }
 }
 
-/// Spawn a process while registering it as the cancellable active child.
-fn spawn_tracked(cmd: &mut Command) -> io::Result<Output> {
-    // `spawn` alone inherits stdio; `wait_with_output` needs pipes to capture.
-    cmd.stdout(std::process::Stdio::piped())
+/// Spawn a process while registering it as the cancellable active child, and
+/// stream its output: stdout/stderr reader threads push parsed progress to
+/// the sink and the calling thread polls `try_wait` until the process exits
+/// (killing it if the user cancelled). The child stays registered for the
+/// whole run so `cancel_recovery` and pause/resume can reach it.
+fn spawn_tracked(
+    cmd: &mut Command,
+    sink: ProgressSink,
+    source: ProgressSource,
+) -> io::Result<TrackedOutput> {
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     crate::logging::event("engine", "command", "spawn", Some(&format_command(cmd)));
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
     {
         let mut guard = ACTIVE_CHILD.lock().unwrap();
         *guard = Some(child);
     }
-    let child = ACTIVE_CHILD.lock().unwrap().take().unwrap();
-    child.wait_with_output()
+    *ACTIVE_STDIN.lock().unwrap() = stdin;
+    *ACTIVE_SOURCE.lock().unwrap() = Some(source);
+
+    let out_thread = std::thread::spawn({
+        let sink = sink.clone();
+        move || read_stream(stdout, source, sink)
+    });
+    let err_thread = std::thread::spawn({
+        let sink = sink.clone();
+        move || read_stream(stderr, source, sink)
+    });
+
+    let status = loop {
+        std::thread::sleep(Duration::from_millis(50));
+        let mut guard = ACTIVE_CHILD.lock().unwrap();
+        let child = guard.as_mut().expect("active child is set while running");
+        match child.try_wait()? {
+            Some(status) => break status,
+            None => {
+                if CANCELLED.load(Ordering::SeqCst) {
+                    let _ = child.kill();
+                }
+            }
+        }
+    };
+
+    {
+        let mut guard = ACTIVE_CHILD.lock().unwrap();
+        *guard = None;
+    }
+    *ACTIVE_STDIN.lock().unwrap() = None;
+    *ACTIVE_SOURCE.lock().unwrap() = None;
+
+    let stdout = out_thread.join().unwrap_or_default();
+    let stderr = err_thread.join().unwrap_or_default();
+    Ok(TrackedOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// Read a pipe line by line, accumulate the raw bytes (used later to find the
+/// cracked-password line) and forward any parseable progress lines to the sink.
+fn read_stream(reader: impl std::io::Read, source: ProgressSource, sink: ProgressSink) -> Vec<u8> {
+    let mut reader = io::BufReader::new(reader);
+    let mut buf = Vec::new();
+    let mut line = Vec::new();
+    let mut last = RecoveryProgress::default();
+    loop {
+        line.clear();
+        let n = reader.read_until(b'\n', &mut line).unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&line);
+        let text = String::from_utf8_lossy(&line);
+        let updated = match source {
+            ProgressSource::Hashcat => parse_hashcat_progress(text.trim_end(), &mut last),
+            ProgressSource::John => parse_john_progress(text.trim_end(), &mut last),
+        };
+        if updated {
+            sink(&last);
+        }
+    }
+    buf
+}
+
+/// Parse one Hashcat status line, updating the running progress snapshot.
+///
+/// Status blocks (printed once per `--status-timer` second) look like:
+/// `Progress.........: 1024/1048576 (0.10%)`, `Speed.#*.........: 1.2 MH/s`,
+/// `Candidates.#1....: pw123 -> pw123`, `Time.Estimated...: ... (1 hour)`.
+fn parse_hashcat_progress(line: &str, last: &mut RecoveryProgress) -> bool {
+    let Some((key, value)) = line.split_once(':') else {
+        return false;
+    };
+    // Keys are padded with dots (`Progress.........`); strip them.
+    let key = key.trim().trim_end_matches('.');
+    let value = value.trim();
+    match key {
+        "Progress" => {
+            parse_hashcat_frac(value, last);
+            true
+        }
+        "Speed.#*" | "Speed.#1" => {
+            if !value.is_empty() {
+                last.speed = Some(value.to_string());
+            }
+            true
+        }
+        "Candidates.#1" => {
+            let current = value.split(" -> ").next().unwrap_or(value).trim();
+            if !current.is_empty() {
+                last.candidate = Some(current.to_string());
+            }
+            true
+        }
+        "Time.Estimated" => {
+            last.eta = Some(
+                value
+                    .rsplit_once('(')
+                    .and_then(|(_, inner)| inner.strip_suffix(')'))
+                    .map(str::trim)
+                    .unwrap_or(value)
+                    .to_string(),
+            );
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Parse `tried/total (percent%)` into the progress snapshot.
+fn parse_hashcat_frac(value: &str, last: &mut RecoveryProgress) {
+    if let Some((tried, rest)) = value.split_once('/') {
+        if let Ok(t) = tried.trim().parse() {
+            last.tried = Some(t);
+        }
+        if let Ok(t) = rest.split_whitespace().next().unwrap_or("").parse() {
+            last.total = Some(t);
+        }
+    }
+    if let Some(open) = value.find('(') {
+        let end = value[open + 1..]
+            .find('%')
+            .map(|i| open + 1 + i)
+            .unwrap_or(value.len());
+        if let Ok(p) = value[open + 1..end].trim().parse::<f64>() {
+            last.percent = Some(p);
+        }
+    }
+}
+
+/// Parse one John progress line (`--progress-every`): a word like
+/// `0g 0:00:00:07 0.00% (g/s: 5.4M)`. John only reports percentage and speed.
+fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
+    let mut updated = false;
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if let Some(pct) = tokens.get(2).and_then(|t| t.strip_suffix('%')) {
+        if let Ok(p) = pct.parse::<f64>() {
+            last.percent = Some(p);
+            updated = true;
+        }
+    }
+    if let Some(idx) = line.find("g/s:") {
+        if let Some(speed) = line[idx + 4..].split_whitespace().next() {
+            last.speed = Some(speed.trim_end_matches([')', ',']).to_string());
+            updated = true;
+        }
+    }
+    updated
+}
+
+/// Pause the running engine. Hashcat pauses natively when `p` is sent to its
+/// stdin; John is suspended with an OS signal (SIGSTOP / NtSuspendProcess).
+pub fn pause_recovery() {
+    match *ACTIVE_SOURCE.lock().unwrap() {
+        Some(ProgressSource::Hashcat) => write_stdin(b"p"),
+        Some(ProgressSource::John) => suspend_active(),
+        None => {}
+    }
+}
+
+/// Resume a paused engine.
+pub fn resume_recovery() {
+    match *ACTIVE_SOURCE.lock().unwrap() {
+        Some(ProgressSource::Hashcat) => write_stdin(b"p"),
+        Some(ProgressSource::John) => resume_active(),
+        None => {}
+    }
+}
+
+fn write_stdin(data: &[u8]) {
+    if let Ok(mut guard) = ACTIVE_STDIN.lock() {
+        if let Some(stdin) = guard.as_mut() {
+            let _ = stdin.write_all(data);
+        }
+    }
+}
+
+fn active_pid() -> Option<u32> {
+    ACTIVE_CHILD
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|child| child.id())
+}
+
+#[cfg(unix)]
+fn suspend_active() {
+    if let Some(pid) = active_pid() {
+        // Safety: SIGSTOP on our own spawned child.
+        unsafe {
+            libc::kill(pid as i32, libc::SIGSTOP);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn resume_active() {
+    if let Some(pid) = active_pid() {
+        // Safety: SIGCONT on our own spawned child.
+        unsafe {
+            libc::kill(pid as i32, libc::SIGCONT);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn suspend_active() {
+    if let Some(pid) = active_pid() {
+        windows_pause::suspend(pid);
+    }
+}
+
+#[cfg(windows)]
+fn resume_active() {
+    if let Some(pid) = active_pid() {
+        windows_pause::resume(pid);
+    }
+}
+
+/// Windows has no POSIX signals; suspend/resume the process by calling the
+/// undocumented `NtSuspendProcess`/`NtResumeProcess` in ntdll.
+#[cfg(windows)]
+mod windows_pause {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SUSPEND_RESUME};
+
+    type NtSuspendFn = unsafe extern "system" fn(*mut c_void) -> i32;
+
+    fn nt_function(name: &[u8]) -> Option<NtSuspendFn> {
+        // Safety: loads a fixed ntdll export whose signature is stable.
+        unsafe {
+            let module = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+            if module.is_null() {
+                return None;
+            }
+            // `FARPROC` is either an `isize` or a pointer depending on the
+            // windows-sys version; normalize through `usize`.
+            let address = GetProcAddress(module, name.as_ptr()) as usize;
+            if address == 0 {
+                return None;
+            }
+            Some(std::mem::transmute::<usize, NtSuspendFn>(address))
+        }
+    }
+
+    fn with_process_handle(pid: u32, f: NtSuspendFn) {
+        // Safety: OpenProcess/CloseHandle on our own spawned child.
+        unsafe {
+            let handle = OpenProcess(PROCESS_SUSPEND_RESUME, 0, pid);
+            if handle.is_null() {
+                return;
+            }
+            let _ = f(handle as *mut c_void);
+            CloseHandle(handle);
+        }
+    }
+
+    pub fn suspend(pid: u32) {
+        if let Some(f) = nt_function(b"NtSuspendProcess\0") {
+            with_process_handle(pid, f);
+        }
+    }
+
+    pub fn resume(pid: u32) {
+        if let Some(f) = nt_function(b"NtResumeProcess\0") {
+            with_process_handle(pid, f);
+        }
+    }
 }
 
 /// Render a command line for logging: the program path and each argument,
@@ -377,7 +734,19 @@ fn ok_result(password: String, commands: &[String]) -> RecoverResult {
         password: Some(password),
         message: None,
         cancelled: false,
+        reused: false,
         command_lines: commands.to_vec(),
+    }
+}
+
+fn reused_result(password: String) -> RecoverResult {
+    RecoverResult {
+        ok: true,
+        password: Some(password),
+        message: None,
+        cancelled: false,
+        reused: true,
+        command_lines: Vec::new(),
     }
 }
 
@@ -387,8 +756,42 @@ fn not_found(commands: &[String]) -> RecoverResult {
         password: None,
         message: None,
         cancelled: false,
+        reused: false,
         command_lines: commands.to_vec(),
     }
+}
+
+/// Store a successful recovery in the local history for future reuse. The
+/// store key is the bare normalized hash; metadata comes from the request.
+fn record_history(
+    history_dir: Option<&Path>,
+    request: &RecoverRequest,
+    normalized: &NormalizedHash,
+    engine: &str,
+    password: &str,
+) {
+    let Some(dir) = history_dir else {
+        return;
+    };
+    let description = normalizer::describe_hash(&request.hash);
+    let file_name = Path::new(&request.file_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .or_else(|| normalized.filename.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    history::record(
+        dir,
+        history::HistoryEntry {
+            hash: normalized.hash.clone(),
+            file_name,
+            encryption: description.as_ref().map(|d| d.encryption.clone()),
+            difficulty: description.as_ref().map(|d| d.difficulty.to_string()),
+            password: password.to_string(),
+            engine: engine.to_string(),
+            strategy_kind: format!("{:?}", request.strategy.kind).to_lowercase(),
+            recovered_at: history::now_ms(),
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -404,11 +807,16 @@ enum HashcatOutcome {
 
 /// Run Hashcat against the bare hash and capture the cracked password line
 /// (`<hash>:<password>` on stdout) or translate the exit into an outcome.
+///
+/// Hashcat runs without `--quiet` so its periodic `--status` blocks can be
+/// parsed into progress events; the extra banner/status noise is harmless to
+/// the cracked-line parser below. `--status-timer=1` keeps the blocks fresh.
 fn run_hashcat(
     binary: &Path,
     mode: u32,
     hash_file: &Path,
     attack_args: &[String],
+    sink: ProgressSink,
     commands: &mut Vec<String>,
 ) -> HashcatOutcome {
     let mut cmd = std::process::Command::new(binary);
@@ -418,9 +826,10 @@ fn run_hashcat(
         .args(attack_args)
         .arg("--potfile-disable")
         .arg("--restore-disable")
-        .arg("--quiet");
+        .arg("--status")
+        .arg("--status-timer=1");
     commands.push(format_command(&cmd));
-    let output = spawn_tracked(&mut cmd);
+    let output = spawn_tracked(&mut cmd, sink, ProgressSource::Hashcat);
     let output = match output {
         Ok(out) => out,
         Err(_) => return HashcatOutcome::Error,
@@ -443,15 +852,23 @@ fn run_hashcat(
 }
 
 /// Find the `<hash>:<password>` line Hashcat prints when a password is found.
+///
+/// With stdin piped, Hashcat shows an interactive prompt line and appends the
+/// crack line to it (`[s]tatus ... => \r  $pdf$...:password123`), so the hash
+/// is located anywhere in the line, not only at its start. The hash segment
+/// (leading `$` up to the first `:`) never contains spaces, which rules out
+/// the prompt prefix and status lines like `Hash.Target......: $pdf$...`.
 fn crack_line(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .map(str::trim_end)
-        .filter(|l| l.starts_with('$'))
-        .find_map(|l| {
-            let (_, pw) = l.rsplit_once(':')?;
-            Some(decode_password(pw))
-        })
+    stdout.lines().map(str::trim_end).find_map(|line| {
+        let start = line.find('$')?;
+        let rest = &line[start..];
+        let (hash, _) = rest.split_once(':')?;
+        if hash.contains(' ') {
+            return None;
+        }
+        let (_, pw) = rest.rsplit_once(':')?;
+        Some(decode_password(pw))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +883,9 @@ enum JohnOutcome {
 
 /// Run John against a `name:$hash$` file, then read the cracked password back
 /// with `--show`. The pot file is per-attempt and removed afterwards, so no
-/// password is stored permanently.
+/// password is stored permanently. `--progress-every=1` makes John emit its
+/// progress line to stderr once per second for the progress sink.
+#[allow(clippy::too_many_arguments)]
 fn run_john(
     binary: &Path,
     format: &str,
@@ -474,15 +893,17 @@ fn run_john(
     pot_file: &Path,
     attack_args: &[String],
     display_name: &str,
+    sink: ProgressSink,
     commands: &mut Vec<String>,
 ) -> JohnOutcome {
     let mut run = std::process::Command::new(binary);
     run.arg(format!("--format={format}"))
         .arg(format!("--pot={}", pot_file.display()))
+        .arg("--progress-every=1")
         .args(attack_args)
         .arg(hash_file);
     commands.push(format_command(&run));
-    let run = spawn_tracked(&mut run);
+    let run = spawn_tracked(&mut run, sink.clone(), ProgressSource::John);
     if run.is_err() {
         return JohnOutcome::Error;
     }
@@ -492,7 +913,7 @@ fn run_john(
         .arg(format!("--pot={}", pot_file.display()))
         .arg(hash_file);
     commands.push(format_command(&show));
-    let show = spawn_tracked(&mut show);
+    let show = spawn_tracked(&mut show, sink, ProgressSource::John);
     let show = match show {
         Ok(out) => out,
         Err(_) => return JohnOutcome::Error,
@@ -1094,14 +1515,197 @@ mod tests {
         }
 
         let candidates = program_names("hashcat");
-        let found = find_program_in_dirs(&[dir.clone()], "hashcat", &candidates);
+        let found = find_program_in_dirs(std::slice::from_ref(&dir), "hashcat", &candidates);
 
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(found, Some(bin));
     }
 
+    #[test]
+    fn hashcat_status_progress_is_parsed() {
+        let mut p = RecoveryProgress::default();
+        assert!(parse_hashcat_progress(
+            "Progress.........: 1024/1048576 (0.10%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(1024));
+        assert_eq!(p.total, Some(1048576));
+        assert_eq!(p.percent, Some(0.10));
+        assert!(parse_hashcat_progress(
+            "Speed.#*.........: 1.2 MH/s",
+            &mut p
+        ));
+        assert_eq!(p.speed.as_deref(), Some("1.2 MH/s"));
+        assert!(parse_hashcat_progress(
+            "Candidates.#1....: pw123 -> pw456",
+            &mut p
+        ));
+        assert_eq!(p.candidate.as_deref(), Some("pw123"));
+        assert!(parse_hashcat_progress(
+            "Time.Estimated...: Sun Aug 16 18:00:00 2026 (1 hour, 5 mins)",
+            &mut p
+        ));
+        assert_eq!(p.eta.as_deref(), Some("1 hour, 5 mins"));
+    }
+
+    #[test]
+    fn john_progress_is_parsed() {
+        let mut p = RecoveryProgress::default();
+        assert!(parse_john_progress(
+            "0g 0:00:00:07 0.00% (g/s: 5.4M)",
+            &mut p
+        ));
+        assert_eq!(p.percent, Some(0.0));
+        assert_eq!(p.speed.as_deref(), Some("5.4M"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn spawn_tracked_streams_progress_and_captures_output() {
+        let _guard = RUN_LOCK.lock().unwrap();
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink: ProgressSink = Arc::new({
+            let events = events.clone();
+            move |p| events.lock().unwrap().push(p.clone())
+        });
+        let mut cmd = Command::new("sh");
+        cmd.args([
+            "-c",
+            "printf '%s\\n' 'Progress.........: 5/10 (50.00%)' 'Speed.#*.........: 1.0 MH/s'",
+        ]);
+        let out = spawn_tracked(&mut cmd, sink, ProgressSource::Hashcat).unwrap();
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(
+            out.stdout,
+            b"Progress.........: 5/10 (50.00%)\nSpeed.#*.........: 1.0 MH/s\n"
+        );
+        let events = events.lock().unwrap();
+        assert!(!events.is_empty());
+        assert_eq!(events.first().unwrap().tried, Some(5));
+        assert_eq!(events.first().unwrap().total, Some(10));
+        assert_eq!(events.first().unwrap().percent, Some(50.0));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pause_and_resume_hashcat_via_stdin() {
+        let Some(hashcat) = resolve_program("hashcat") else {
+            eprintln!("skipping: hashcat not available");
+            return;
+        };
+        let _guard = RUN_LOCK.lock().unwrap();
+        let ws = TempWorkspace::new().unwrap();
+        let hash_file = ws.write("hash.txt", &reference_hash("aes256")).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sink: ProgressSink = Arc::new(move |p| {
+            let _ = tx.send(p.clone());
+        });
+
+        let mut cmd = Command::new(&hashcat);
+        cmd.arg("-m")
+            .arg("10700")
+            .arg(&hash_file)
+            .arg("-a")
+            .arg("3")
+            .arg("?d?d?d?d?d?d?d?d")
+            .arg("--potfile-disable")
+            .arg("--restore-disable")
+            .arg("--status")
+            .arg("--status-timer=1");
+        let handle =
+            std::thread::spawn(move || spawn_tracked(&mut cmd, sink, ProgressSource::Hashcat));
+
+        // Wait for a real `Progress` status line, then pause, resume, cancel.
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut got_tried = false;
+        while std::time::Instant::now() < deadline {
+            let event = rx
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .expect("hashcat should stream status blocks");
+            if event.tried.is_some() {
+                got_tried = true;
+                break;
+            }
+        }
+        assert!(got_tried, "hashcat status never reported a tried count");
+        pause_recovery();
+        std::thread::sleep(Duration::from_millis(300));
+        resume_recovery();
+        std::thread::sleep(Duration::from_millis(300));
+        cancel_recovery();
+
+        let out = handle
+            .join()
+            .unwrap()
+            .expect("spawn_tracked should succeed");
+        assert!(!out.stdout.is_empty());
+    }
+
+    #[test]
+    fn recovery_history_answers_repeat_attempt_instantly() {
+        let dir = std::env::temp_dir().join(format!("hashrecover-reuse-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let request = RecoverRequest {
+            file_path: "x.pdf".into(),
+            hash: reference_hash("aes256"),
+            strategy: RecoveryStrategy {
+                kind: StrategyKind::Dictionary,
+                options: StrategyOptions::default(),
+            },
+        };
+        let normalized = normalizer::normalize_hash(&request.hash).unwrap();
+        record_history(Some(&dir), &request, &normalized, "hashcat", "password123");
+        assert!(history::find(&dir, &normalized.hash).is_some());
+
+        // A repeat attempt answers from history without running any engine.
+        let result = recover_with_sink(request, Arc::new(|_| {}), Some(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(result.ok, "reuse failed: {:?}", result.message);
+        assert!(result.reused);
+        assert_eq!(result.password.as_deref(), Some("password123"));
+    }
+
+    #[test]
+    fn successful_crack_is_recorded_for_reuse() {
+        let Some(_hashcat) = resolve_program("hashcat") else {
+            eprintln!("skipping: hashcat not available");
+            return;
+        };
+        // recover_with_sink serializes itself via RUN_LOCK; the e2e crack is
+        // the only engine run here.
+        let dir = std::env::temp_dir().join(format!("hashrecover-record-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let (wl_dir, wl) = temp_wordlist("password123\n");
+        let request = RecoverRequest {
+            file_path: fixture("aes256.pdf").to_string_lossy().into_owned(),
+            hash: reference_hash("aes256"),
+            strategy: RecoveryStrategy {
+                kind: StrategyKind::Dictionary,
+                options: StrategyOptions {
+                    dictionary: Some(wl.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            },
+        };
+        let result = recover_with_sink(request, Arc::new(|_| {}), Some(&dir));
+        std::fs::remove_dir_all(&wl_dir).ok();
+        assert!(result.ok, "recovery failed: {:?}", result.message);
+        assert!(!result.reused);
+
+        let normalized = normalizer::normalize_hash(&reference_hash("aes256")).unwrap();
+        let entry = history::find(&dir, &normalized.hash);
+        assert_eq!(
+            entry.as_ref().map(|e| e.password.as_str()),
+            Some("password123")
+        );
+        assert_eq!(entry.as_ref().map(|e| e.engine.as_str()), Some("hashcat"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn temp_wordlist(contents: &str) -> (PathBuf, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("hashrecover-wl-{}", std::process::id()));
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("hashrecover-wl-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let wl = dir.join("test-wordlist.txt");
         std::fs::write(&wl, contents).unwrap();

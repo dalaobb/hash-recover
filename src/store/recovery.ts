@@ -4,6 +4,8 @@ import {
   cancelRecovery,
   extractHash,
   getGpuInfo,
+  pauseRecovery,
+  resumeRecovery,
   runRecovery,
 } from "../lib/commands";
 import {
@@ -19,6 +21,7 @@ import type {
   ExtractResult,
   GpuInfo,
   RecoverResult,
+  RecoveryProgress,
   RecoveryStrategy,
 } from "../lib/types";
 
@@ -29,7 +32,8 @@ export type Phase =
   | "knowledge"
   | "configure"
   | "running"
-  | "result";
+  | "result"
+  | "history";
 
 /** The three top-level questions on the knowledge page. */
 export type Knowledge = "partial" | "common" | "none";
@@ -58,6 +62,10 @@ interface RecoveryState {
 
   result: RecoverResult | null;
   gpu: GpuInfo | null;
+  /** Latest live progress event from the engine while running. */
+  progress: RecoveryProgress | null;
+  /** Whether the user paused the running attempt. */
+  paused: boolean;
 
   selectFile: (path: string) => void;
   analyze: () => Promise<void>;
@@ -72,6 +80,11 @@ interface RecoveryState {
   setPartB: (text: string) => void;
   startRecovery: () => Promise<void>;
   cancel: () => void;
+  setProgress: (progress: RecoveryProgress) => void;
+  pause: () => void;
+  resume: () => void;
+  openHistory: () => void;
+  closeHistory: () => void;
   toConfigure: () => void;
   backToKnowledge: () => void;
   backToConfigure: () => void;
@@ -102,6 +115,8 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
 
   result: null,
   gpu: null,
+  progress: null,
+  paused: false,
 
   selectFile: (path) => {
     set({
@@ -115,6 +130,8 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
       ...initialWizard(),
       result: null,
       gpu: null,
+      progress: null,
+      paused: false,
     });
     void get().analyze();
   },
@@ -177,7 +194,7 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
   startRecovery: async () => {
     const { filePath, hash } = get();
     if (!filePath || !hash) return;
-    set({ phase: "running", result: null });
+    set({ phase: "running", result: null, progress: null, paused: false });
     const [result, gpu] = await Promise.all([
       runRecovery({
         filePath,
@@ -190,15 +207,31 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
       console.log("[HashRecover] engine command lines:", result.commandLines);
     }
     if (result.cancelled) {
-      set({ phase: "configure", result: null, gpu: null });
+      set({ phase: "configure", result: null, gpu: null, progress: null, paused: false });
       return;
     }
-    set({ phase: "result", result, gpu });
+    set({ phase: "result", result, gpu, progress: null, paused: false });
   },
 
   cancel: () => {
     void cancelRecovery();
   },
+
+  setProgress: (progress) => set({ progress }),
+
+  pause: () => {
+    void pauseRecovery();
+    set({ paused: true });
+  },
+
+  resume: () => {
+    void resumeRecovery();
+    set({ paused: false });
+  },
+
+  openHistory: () => set({ phase: "history" }),
+
+  closeHistory: () => set({ phase: "select" }),
 
   toConfigure: () => set({ phase: "configure" }),
 
@@ -218,6 +251,8 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
       ...initialWizard(),
       result: null,
       gpu: null,
+      progress: null,
+      paused: false,
     }),
 }));
 

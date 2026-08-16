@@ -1525,6 +1525,7 @@ name = "hash-recover"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "libc",
  "log",
  "serde",
  "serde_json",
@@ -1532,6 +1533,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

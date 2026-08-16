@@ -5,20 +5,23 @@ import { KnowledgeSelect } from "./components/KnowledgeSelect";
 import { ConfigureView } from "./components/ConfigureView";
 import { RunView } from "./components/RunView";
 import { ResultView } from "./components/ResultView";
+import { HistoryView } from "./components/HistoryView";
 import { SettingsModal } from "./components/SettingsModal";
 import { useRecovery } from "./store/recovery";
 import { useAppConfig } from "./lib/appConfig";
+import { useT } from "./lib/i18n";
 import { FONT_SIZE_PX, useSettings } from "./store/settings";
 
 const STEPS = [
-  { label: "File", phases: ["select", "analyzing", "rejected"] },
-  { label: "What you know", phases: ["knowledge"] },
-  { label: "Configure", phases: ["configure"] },
-  { label: "Recover", phases: ["running"] },
-  { label: "Result", phases: ["result"] },
+  { label: "app.steps.file", phases: ["select", "analyzing", "rejected"] },
+  { label: "app.steps.knowledge", phases: ["knowledge"] },
+  { label: "app.steps.configure", phases: ["configure"] },
+  { label: "app.steps.recover", phases: ["running"] },
+  { label: "app.steps.result", phases: ["result"] },
 ] as const;
 
 function StepBar({ active }: { active: number }) {
+  const t = useT();
   return (
     <div className="flex items-center justify-center gap-2 border-b border-border bg-card px-6 py-3">
       {STEPS.map((step, index) => {
@@ -42,7 +45,7 @@ function StepBar({ active }: { active: number }) {
               >
                 {done ? "✓" : index + 1}
               </span>
-              {step.label}
+              {t(step.label)}
             </div>
             {index < STEPS.length - 1 && <span className="text-border">›</span>}
           </div>
@@ -57,6 +60,7 @@ function App() {
   const { data: config, isLoading } = useAppConfig();
   const theme = useSettings((s) => s.theme);
   const fontSize = useSettings((s) => s.fontSize);
+  const t = useT();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
@@ -78,14 +82,14 @@ function App() {
             <h1 className="text-base font-semibold leading-tight">
               {isLoading || !config ? "HashRecover" : config.productName}
             </h1>
-            <p className="text-xs text-text-muted">Password recovery assistant</p>
+            <p className="text-xs text-text-muted">{t("app.tagline")}</p>
           </div>
         </div>
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
-          aria-label="Open settings"
-          title="Settings"
+          aria-label={t("app.settings")}
+          title={t("app.settings")}
           className="rounded-md p-2 text-text-muted transition-colors hover:bg-card-hover hover:text-text"
         >
           <svg
@@ -113,6 +117,7 @@ function App() {
         {phase === "configure" && <ConfigureView />}
         {phase === "running" && <RunView />}
         {phase === "result" && <ResultView />}
+        {phase === "history" && <HistoryView />}
       </main>
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

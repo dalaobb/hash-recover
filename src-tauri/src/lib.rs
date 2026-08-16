@@ -3,6 +3,7 @@ mod attack;
 mod engine;
 mod formats;
 mod gpu;
+mod history;
 mod logging;
 mod normalizer;
 mod strategy;
@@ -10,7 +11,9 @@ mod strategy;
 use analyzer::AnalyzeResult;
 use engine::ExtractResult;
 use formats::{AppConfig, ACTIVE_VARIANT};
+use history::HistoryEntry;
 use std::path::Path;
+use std::sync::Arc;
 use strategy::{RecoverRequest, RecoverResult};
 
 /// Expose the active product variant and its supported formats to the frontend.
@@ -85,15 +88,65 @@ fn extract_hash(path: String) -> ExtractResult {
 }
 
 /// Run a recovery attempt for the given hash and strategy.
+///
+/// The command is async so the blocking engine work runs on the blocking
+/// thread pool instead of the UI thread. Live progress events are streamed to
+/// the frontend via `recovery://progress` while the engine runs; the resolved
+/// `RecoverResult` is the final outcome. A password recovered earlier for the
+/// same hash is reused instantly before any engine runs.
 #[tauri::command]
-fn recover(request: RecoverRequest) -> RecoverResult {
-    engine::recover(request)
+async fn recover(app: tauri::AppHandle, request: RecoverRequest) -> RecoverResult {
+    let sink: engine::ProgressSink = {
+        use tauri::Emitter;
+        let app = app.clone();
+        Arc::new(move |progress| {
+            let _ = app.emit("recovery://progress", progress);
+        })
+    };
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().ok();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::recover_with_sink(request, sink, data_dir.as_deref())
+    })
+    .await
+    .unwrap_or_else(|_| RecoverResult::error("The recovery attempt was interrupted."))
+}
+
+/// The local recovery history: every password recovered so far on this device.
+#[tauri::command]
+fn get_history(app: tauri::AppHandle) -> Vec<HistoryEntry> {
+    use tauri::Manager;
+    match app.path().app_data_dir() {
+        Ok(dir) => history::load(&dir),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Delete the local recovery history. The frontend confirms before calling.
+#[tauri::command]
+fn clear_history(app: tauri::AppHandle) {
+    use tauri::Manager;
+    if let Ok(dir) = app.path().app_data_dir() {
+        history::clear(&dir);
+    }
 }
 
 /// Cancel the recovery attempt currently running in the engine layer.
 #[tauri::command]
 fn cancel_recovery() {
     engine::cancel_recovery();
+}
+
+/// Pause the running engine (Hashcat via its `p` key, John via suspend).
+#[tauri::command]
+fn pause_recovery() {
+    engine::pause_recovery();
+}
+
+/// Resume a paused engine.
+#[tauri::command]
+fn resume_recovery() {
+    engine::resume_recovery();
 }
 
 /// Report the compute devices Hashcat can use (for the result screen).
@@ -114,7 +167,11 @@ pub fn run() {
             extract_hash,
             recover,
             cancel_recovery,
-            get_gpu_info
+            pause_recovery,
+            resume_recovery,
+            get_gpu_info,
+            get_history,
+            clear_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -170,7 +227,7 @@ mod tests {
                 options: StrategyOptions::default(),
             },
         };
-        let result = recover(request);
+        let result = engine::recover(request);
         assert!(!result.ok);
         assert_eq!(
             result.message,

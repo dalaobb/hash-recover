@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { Language } from "../lib/i18n";
 
 export type Theme = "dark" | "light";
 export type FontSize = "small" | "normal" | "large" | "larger";
@@ -21,8 +22,10 @@ export const FONT_SIZE_LABELS: Record<FontSize, string> = {
 interface SettingsState {
   theme: Theme;
   fontSize: FontSize;
+  language: Language;
   setTheme: (theme: Theme) => void;
   setFontSize: (size: FontSize) => void;
+  setLanguage: (language: Language) => void;
 }
 
 export const useSettings = create<SettingsState>()(
@@ -30,8 +33,10 @@ export const useSettings = create<SettingsState>()(
     (set) => ({
       theme: "dark",
       fontSize: "normal",
+      language: "en",
       setTheme: (theme) => set({ theme }),
       setFontSize: (fontSize) => set({ fontSize }),
+      setLanguage: (language) => set({ language }),
     }),
     { name: "hashrecover-settings" },
   ),

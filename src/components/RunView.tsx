@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useRecovery } from "../store/recovery";
 import { FileSummary } from "./FileSummary";
+import { useT } from "../lib/i18n";
+import type { RecoveryProgress } from "../lib/types";
 
 function formatElapsed(totalSeconds: number): string {
   const h = Math.floor(totalSeconds / 3600);
@@ -10,11 +13,21 @@ function formatElapsed(totalSeconds: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
-/** Execution page. Progress is reported live by the engine; until that lands
- *  this uses a real elapsed timer and placeholders for the engine stats. */
+function formatCount(value: number | null): string {
+  return value === null ? "—" : value.toLocaleString();
+}
+
+/** Execution page. The engine streams live progress (`recovery://progress`)
+ *  while it runs; this view renders the real stats and pause/cancel. */
 export function RunView() {
   const gpu = useRecovery((s) => s.gpu);
+  const progress = useRecovery((s) => s.progress);
+  const paused = useRecovery((s) => s.paused);
   const cancel = useRecovery((s) => s.cancel);
+  const pause = useRecovery((s) => s.pause);
+  const resume = useRecovery((s) => s.resume);
+  const setProgress = useRecovery((s) => s.setProgress);
+  const t = useT();
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -25,19 +38,40 @@ export function RunView() {
     return () => window.clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<RecoveryProgress>("recovery://progress", (event) => {
+      setProgress(event.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [setProgress]);
+
   const device = gpu?.devices[0];
   const acceleration =
     gpu?.acceleration === "gpu"
-      ? "GPU acceleration enabled"
+      ? t("run.gpuEnabled")
       : gpu?.acceleration === "cpu"
-        ? "CPU acceleration"
-        : "Detecting hardware…";
+        ? t("run.cpuAccel")
+        : t("run.detectingHardware");
+
+  const percent = progress?.percent ?? null;
+  const total = progress?.total ?? null;
+  const tried = progress?.tried ?? null;
 
   const stats: { label: string; value: string }[] = [
-    { label: "Time elapsed", value: formatElapsed(elapsed) },
-    { label: "Passwords tried", value: "—" },
-    { label: "Speed", value: "—" },
-    { label: "Current candidate", value: "—" },
+    { label: t("run.timeElapsed"), value: formatElapsed(elapsed) },
+    {
+      label: t("run.passwordsTried"),
+      value:
+        total !== null && tried !== null
+          ? `${formatCount(tried)} / ${formatCount(total)}`
+          : formatCount(tried),
+    },
+    { label: t("run.speed"), value: progress?.speed ?? "—" },
+    { label: t("run.currentCandidate"), value: progress?.candidate ?? "—" },
+    { label: t("run.estimatedTime"), value: progress?.eta ?? "—" },
   ];
 
   return (
@@ -47,18 +81,36 @@ export function RunView() {
       <div className="flex flex-col gap-5 rounded-lg border border-border bg-card p-6">
         <div className="flex items-center gap-3">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-border border-t-primary" />
-          <h2 className="text-sm font-semibold">Recovering password…</h2>
+          <h2 className="text-sm font-semibold">
+            {paused ? t("run.paused") : t("run.recovering")}
+          </h2>
+          {paused && <span className="text-xs text-text-muted">{t("run.resumeHint")}</span>}
         </div>
 
         <div className="h-2 w-full overflow-hidden rounded-full bg-bg">
-          <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-700"
+            style={{
+              width: percent !== null ? `${Math.min(100, percent)}%` : undefined,
+            }}
+          >
+            {percent === null && <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />}
+          </div>
         </div>
-        <p className="text-xs text-text-muted">
-          Progress is shown in real time. Keep the window open until the attempt
-          finishes.
-        </p>
+        <div className="flex items-center justify-between text-xs text-text-muted">
+          <span>
+            {percent !== null
+              ? t("run.complete", { percent: percent.toFixed(2) })
+              : t("run.waiting")}
+          </span>
+          {percent !== null && tried !== null && total !== null && (
+            <span>
+              {t("run.ofCandidates", { tried: formatCount(tried), total: formatCount(total) })}
+            </span>
+          )}
+        </div>
 
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
           {stats.map((stat) => (
             <div key={stat.label} className="flex flex-col gap-1 rounded-md border border-border bg-bg p-3">
               <span className="text-xs text-text-muted">{stat.label}</span>
@@ -69,7 +121,7 @@ export function RunView() {
 
         {device && (
           <div className="flex flex-col gap-0.5 text-xs text-text-muted">
-            <span>Detected: {device.name}</span>
+            <span>{t("run.detected", { device: device.name })}</span>
             <span>{acceleration}</span>
           </div>
         )}
@@ -78,18 +130,17 @@ export function RunView() {
       <div className="flex justify-end gap-3">
         <button
           type="button"
-          disabled
-          title="Pause will be available soon"
-          className="rounded-md border border-border px-6 py-2.5 text-sm text-text transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={paused ? resume : pause}
+          className="rounded-md border border-border px-6 py-2.5 text-sm text-text transition-colors hover:border-primary"
         >
-          Pause
+          {paused ? t("run.resume") : t("run.pause")}
         </button>
         <button
           type="button"
           onClick={cancel}
           className="rounded-md border border-danger/60 px-6 py-2.5 text-sm font-semibold text-danger transition-colors hover:bg-danger/10"
         >
-          Cancel
+          {t("run.cancel")}
         </button>
       </div>
     </div>

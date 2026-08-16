@@ -1,18 +1,25 @@
 import {
-  FONT_SIZE_LABELS,
   FONT_SIZE_PX,
   FontSize,
   Theme,
   useSettings,
 } from "../store/settings";
+import { Language, useT } from "../lib/i18n";
 
 const FONT_SIZES: FontSize[] = ["small", "normal", "large", "larger"];
+const LANGUAGES: { id: Language; label: string }[] = [
+  { id: "en", label: "English" },
+  { id: "zh", label: "简体中文" },
+];
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const theme = useSettings((s) => s.theme);
   const setTheme = useSettings((s) => s.setTheme);
   const fontSize = useSettings((s) => s.fontSize);
   const setFontSize = useSettings((s) => s.setFontSize);
+  const language = useSettings((s) => s.language);
+  const setLanguage = useSettings((s) => s.setLanguage);
 
   const themeButton = (value: Theme, label: string) => (
     <button
@@ -29,6 +36,38 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     </button>
   );
 
+  const languageButton = (id: Language, label: string) => (
+    <button
+      key={id}
+      type="button"
+      onClick={() => setLanguage(id)}
+      className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${
+        language === id
+          ? "border-primary bg-primary/10 font-semibold text-text"
+          : "border-border text-text-muted hover:border-primary/60"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  const fontSizeButton = (size: FontSize) => (
+    <button
+      key={size}
+      type="button"
+      onClick={() => setFontSize(size)}
+      className={`flex-1 rounded-md border px-2 py-2 text-sm transition-colors ${
+        fontSize === size
+          ? "border-primary bg-primary/10 font-semibold text-text"
+          : "border-border text-text-muted hover:border-primary/60"
+      }`}
+    >
+      <span style={{ fontSize: FONT_SIZE_PX[size] }}>
+        {t(`settings.fontSizes.${size}`)}
+      </span>
+    </button>
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
@@ -39,11 +78,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">Settings</h2>
+          <h2 className="text-base font-semibold">{t("settings.title")}</h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close settings"
+            aria-label={t("settings.close")}
             className="text-text-muted transition-colors hover:text-text"
           >
             <svg
@@ -61,34 +100,24 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Appearance</span>
+          <span className="text-sm font-medium">{t("settings.language")}</span>
           <div className="flex gap-2">
-            {themeButton("dark", "Dark")}
-            {themeButton("light", "Light")}
+            {LANGUAGES.map((lang) => languageButton(lang.id, lang.label))}
           </div>
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Font size</span>
+          <span className="text-sm font-medium">{t("settings.appearance")}</span>
           <div className="flex gap-2">
-            {FONT_SIZES.map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => setFontSize(size)}
-                className={`flex-1 rounded-md border px-2 py-2 text-sm transition-colors ${
-                  fontSize === size
-                    ? "border-primary bg-primary/10 font-semibold text-text"
-                    : "border-border text-text-muted hover:border-primary/60"
-                }`}
-              >
-                <span style={{ fontSize: FONT_SIZE_PX[size] }}>
-                  {FONT_SIZE_LABELS[size]}
-                </span>
-              </button>
-            ))}
+            {themeButton("dark", t("settings.dark"))}
+            {themeButton("light", t("settings.light"))}
           </div>
-          <p className="text-xs text-text-muted">Preview: this is how text will look.</p>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium">{t("settings.fontSize")}</span>
+          <div className="flex gap-2">{FONT_SIZES.map(fontSizeButton)}</div>
+          <p className="text-xs text-text-muted">{t("settings.preview")}</p>
         </div>
       </div>
     </div>

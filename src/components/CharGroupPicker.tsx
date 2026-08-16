@@ -1,5 +1,6 @@
 import type { CharGroup } from "../lib/charsets";
 import { isCharSelected, toggleChar } from "../lib/charsets";
+import { useT } from "../lib/i18n";
 
 interface Props {
   label: string;
@@ -15,6 +16,7 @@ interface Props {
 export function CharGroupPicker({ label, chars, state, onChange, display }: Props) {
   const allChecked = state.all;
   const isNone = !state.all && state.selected.length === 0;
+  const t = useT();
 
   return (
     <div className="flex flex-col gap-3">
@@ -33,14 +35,11 @@ export function CharGroupPicker({ label, chars, state, onChange, display }: Prop
             }
             className="accent-primary"
           />
-          Select all
+          {t("charGroup.selectAll")}
         </label>
       </div>
       {isNone && (
-        <p className="text-xs text-text-muted">
-          This group is excluded. Ticking Select all (or any character) will
-          include it again.
-        </p>
+        <p className="text-xs text-text-muted">{t("charGroup.excludedNote")}</p>
       )}
       <div className="grid grid-cols-8 gap-1.5">
         {[...chars].map((char) => {

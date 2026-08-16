@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useRecovery } from "../store/recovery";
+import { useT } from "../lib/i18n";
 
 export function ResultView() {
   const result = useRecovery((s) => s.result);
   const backToConfigure = useRecovery((s) => s.backToConfigure);
   const reset = useRecovery((s) => s.reset);
+  const t = useT();
   const [copied, setCopied] = useState(false);
 
   const recovered = Boolean(result?.ok && result.password);
@@ -33,17 +35,19 @@ export function ResultView() {
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
         {recovered ? (
           <>
-            <h2 className="text-lg font-semibold">Password recovered</h2>
-            <p className="text-sm text-text-muted">Your password is:</p>
+            <h2 className="text-lg font-semibold">{t("result.recovered")}</h2>
+            <p className="text-sm text-text-muted">
+              {result?.reused ? t("result.fromHistory") : t("result.yourPassword")}
+            </p>
             <code className="max-w-full break-all rounded-md border border-primary/40 bg-card px-4 py-2 font-mono text-base text-primary">
               {password}
             </code>
           </>
         ) : (
           <>
-            <h2 className="text-lg font-semibold">Password not found</h2>
+            <h2 className="text-lg font-semibold">{t("result.notFound")}</h2>
             <p className="text-sm leading-relaxed text-text-muted">
-              {result?.message ?? "The recovery attempt did not find the password."}
+              {result?.message ?? t("result.notFoundBody")}
             </p>
           </>
         )}
@@ -56,7 +60,7 @@ export function ResultView() {
             onClick={() => void copy()}
             className="rounded-md bg-card px-6 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-card-hover"
           >
-            {copied ? "Copied" : "Copy password"}
+            {copied ? t("result.copied") : t("result.copy")}
           </button>
         )}
         {!recovered && (
@@ -65,7 +69,7 @@ export function ResultView() {
             onClick={backToConfigure}
             className="rounded-md bg-card px-6 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-card-hover"
           >
-            Try a different method
+            {t("result.differentMethod")}
           </button>
         )}
         <button
@@ -77,7 +81,7 @@ export function ResultView() {
               : "rounded-md bg-card px-6 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-card-hover"
           }
         >
-          {recovered ? "Recover another password" : "Choose another file"}
+          {recovered ? t("result.another") : t("result.anotherFile")}
         </button>
       </div>
     </div>

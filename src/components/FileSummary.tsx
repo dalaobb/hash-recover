@@ -1,9 +1,16 @@
 import { useRecovery } from "../store/recovery";
+import { useT } from "../lib/i18n";
 
 const DIFFICULTY_COLORS: Record<string, string> = {
   Easy: "text-primary",
   Medium: "text-yellow-400",
   Hard: "text-danger",
+};
+
+const DIFFICULTY_LABELS: Record<string, "fileSummary.difficulty.easy" | "fileSummary.difficulty.medium" | "fileSummary.difficulty.hard"> = {
+  Easy: "fileSummary.difficulty.easy",
+  Medium: "fileSummary.difficulty.medium",
+  Hard: "fileSummary.difficulty.hard",
 };
 
 /** File info card (logo left, details right) shown on the knowledge and
@@ -13,6 +20,7 @@ export function FileSummary() {
   const filePath = useRecovery((s) => s.filePath);
   const analysis = useRecovery((s) => s.analysis);
   const extraction = useRecovery((s) => s.extraction);
+  const t = useT();
 
   const logo = analysis?.formatId?.toUpperCase().slice(0, 2) ?? "?";
   const difficulty = extraction?.difficulty;
@@ -27,12 +35,16 @@ export function FileSummary() {
         <p className="truncate text-xs text-text-muted">{filePath}</p>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
           {analysis?.formatLabel && <span>{analysis.formatLabel}</span>}
-          {extraction?.encryption && <span>Encryption: {extraction.encryption}</span>}
+          {extraction?.encryption && (
+            <span>{t("fileSummary.encryption", { value: extraction.encryption })}</span>
+          )}
           {difficulty && (
             <span>
-              Estimated difficulty:{" "}
+              {t("fileSummary.difficultyLabel")}
               <span className={DIFFICULTY_COLORS[difficulty] ?? "text-text-muted"}>
-                {difficulty}
+                {DIFFICULTY_LABELS[difficulty]
+                  ? t(DIFFICULTY_LABELS[difficulty])
+                  : difficulty}
               </span>
             </span>
           )}
