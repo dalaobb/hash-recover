@@ -63,6 +63,8 @@ pub struct RecoverResult {
     /// True when the user cancelled the attempt; the UI returns to the
     /// previous step instead of showing a failure.
     pub cancelled: bool,
+    /// The actual engine command lines that were invoked, for debug logging.
+    pub command_lines: Vec<String>,
 }
 
 impl RecoverResult {
@@ -72,6 +74,7 @@ impl RecoverResult {
             password: None,
             message: Some(message),
             cancelled: false,
+            command_lines: Vec::new(),
         }
     }
 
@@ -81,6 +84,7 @@ impl RecoverResult {
             password: None,
             message: None,
             cancelled: true,
+            command_lines: Vec::new(),
         }
     }
 }

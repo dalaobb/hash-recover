@@ -53,6 +53,8 @@ export interface RecoverResult {
   message: string | null;
   /** True when the user cancelled the attempt. */
   cancelled: boolean;
+  /** The engine command lines that were invoked, for debug logging. */
+  commandLines: string[];
 }
 
 export type DeviceKind = "gpu" | "cpu" | "other";

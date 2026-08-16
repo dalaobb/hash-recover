@@ -183,6 +183,9 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
       }),
       getGpuInfo().catch(() => null),
     ]);
+    if (result.commandLines.length > 0) {
+      console.log("[HashRecover] engine command lines:", result.commandLines);
+    }
     if (result.cancelled) {
       set({ phase: "configure", result: null, gpu: null });
       return;

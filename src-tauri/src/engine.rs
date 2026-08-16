@@ -115,12 +115,22 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
         return RecoverResult::error("Could not prepare the password hash for recovery.");
     };
 
+    // Collect the exact command lines invoked so the UI can log them for
+    // debugging (in addition to the live structured log in spawn_tracked).
+    let mut commands: Vec<String> = Vec::new();
+
     // Hashcat first when this hash has a supported mode.
     if let Some(mode) = normalized.hashcat_mode {
         if let Some(hashcat) = resolve_program("hashcat") {
-            match run_hashcat(&hashcat, mode, &hashcat_file, &attack_args.hashcat_args) {
-                HashcatOutcome::Cracked(password) => return ok_result(password),
-                HashcatOutcome::NotFound => return not_found(),
+            match run_hashcat(
+                &hashcat,
+                mode,
+                &hashcat_file,
+                &attack_args.hashcat_args,
+                &mut commands,
+            ) {
+                HashcatOutcome::Cracked(password) => return ok_result(password, &commands),
+                HashcatOutcome::NotFound => return not_found(&commands),
                 // NoHashesLoaded / Error: fall through and let John try.
                 _ => {}
             }
@@ -153,9 +163,10 @@ pub fn recover(request: RecoverRequest) -> RecoverResult {
                 &pot_file,
                 &attack_args.john_args,
                 display_name,
+                &mut commands,
             ) {
-                JohnOutcome::Cracked(password) => return ok_result(password),
-                JohnOutcome::NotFound => return not_found(),
+                JohnOutcome::Cracked(password) => return ok_result(password, &commands),
+                JohnOutcome::NotFound => return not_found(&commands),
                 JohnOutcome::Error => {}
             }
         }
@@ -260,6 +271,7 @@ fn spawn_tracked(cmd: &mut Command) -> io::Result<Output> {
     // `spawn` alone inherits stdio; `wait_with_output` needs pipes to capture.
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    crate::logging::event("engine", "command", "spawn", Some(&format_command(cmd)));
     let child = cmd.spawn()?;
     {
         let mut guard = ACTIVE_CHILD.lock().unwrap();
@@ -269,21 +281,40 @@ fn spawn_tracked(cmd: &mut Command) -> io::Result<Output> {
     child.wait_with_output()
 }
 
-fn ok_result(password: String) -> RecoverResult {
+/// Render a command line for logging: the program path and each argument,
+/// quoting arguments that contain whitespace so the line can be copied.
+fn format_command(cmd: &Command) -> String {
+    std::iter::once(cmd.get_program())
+        .chain(cmd.get_args())
+        .map(|arg| {
+            let s = arg.to_string_lossy();
+            if s.chars().any(char::is_whitespace) {
+                format!("\"{}\"", s.replace('"', "\\\""))
+            } else {
+                s.into_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn ok_result(password: String, commands: &[String]) -> RecoverResult {
     RecoverResult {
         ok: true,
         password: Some(password),
         message: None,
         cancelled: false,
+        command_lines: commands.to_vec(),
     }
 }
 
-fn not_found() -> RecoverResult {
+fn not_found(commands: &[String]) -> RecoverResult {
     RecoverResult {
         ok: false,
         password: None,
         message: None,
         cancelled: false,
+        command_lines: commands.to_vec(),
     }
 }
 
@@ -305,6 +336,7 @@ fn run_hashcat(
     mode: u32,
     hash_file: &Path,
     attack_args: &[String],
+    commands: &mut Vec<String>,
 ) -> HashcatOutcome {
     let mut cmd = std::process::Command::new(binary);
     cmd.arg("-m")
@@ -314,6 +346,7 @@ fn run_hashcat(
         .arg("--potfile-disable")
         .arg("--restore-disable")
         .arg("--quiet");
+    commands.push(format_command(&cmd));
     let output = spawn_tracked(&mut cmd);
     let output = match output {
         Ok(out) => out,
@@ -368,12 +401,14 @@ fn run_john(
     pot_file: &Path,
     attack_args: &[String],
     display_name: &str,
+    commands: &mut Vec<String>,
 ) -> JohnOutcome {
     let mut run = std::process::Command::new(binary);
     run.arg(format!("--format={format}"))
         .arg(format!("--pot={}", pot_file.display()))
         .args(attack_args)
         .arg(hash_file);
+    commands.push(format_command(&run));
     let run = spawn_tracked(&mut run);
     if run.is_err() {
         return JohnOutcome::Error;
@@ -383,6 +418,7 @@ fn run_john(
     show.arg("--show")
         .arg(format!("--pot={}", pot_file.display()))
         .arg(hash_file);
+    commands.push(format_command(&show));
     let show = spawn_tracked(&mut show);
     let show = match show {
         Ok(out) => out,
