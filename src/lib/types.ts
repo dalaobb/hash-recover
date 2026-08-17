@@ -17,6 +17,8 @@ export interface ExtractResult {
   encryption: string | null;
   /** "Easy", "Medium" or "Hard", shown on the file card. */
   difficulty: string | null;
+  /** Non-fatal warning shown on the file card (e.g. oversized hash). */
+  warning: string | null;
 }
 
 export type StrategyKind = "dictionary" | "partial" | "pattern" | "bruteforce" | "combinator";
@@ -56,6 +58,8 @@ export interface RecoverResult {
   ok: boolean;
   password: string | null;
   message: string | null;
+  /** Machine-readable error key for i18n (e.g. "hash_unreadable", "engine_unavailable"). */
+  errorKey: string | null;
   /** True when the user cancelled the attempt. */
   cancelled: boolean;
   /** True when the password came from local recovery history (reuse). */

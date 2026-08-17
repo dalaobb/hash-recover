@@ -64,6 +64,8 @@ pub struct RecoverResult {
     pub ok: bool,
     pub password: Option<String>,
     pub message: Option<&'static str>,
+    /// Machine-readable error key for i18n (e.g. "hash_unreadable", "engine_unavailable").
+    pub error_key: Option<&'static str>,
     /// True when the user cancelled the attempt; the UI returns to the
     /// previous step instead of showing a failure.
     pub cancelled: bool,
@@ -75,11 +77,12 @@ pub struct RecoverResult {
 }
 
 impl RecoverResult {
-    pub fn error(message: &'static str) -> RecoverResult {
+    pub fn error(message: &'static str, error_key: &'static str) -> RecoverResult {
         RecoverResult {
             ok: false,
             password: None,
             message: Some(message),
+            error_key: Some(error_key),
             cancelled: false,
             reused: false,
             command_lines: Vec::new(),
@@ -91,6 +94,7 @@ impl RecoverResult {
             ok: false,
             password: None,
             message: Some("The recovery attempt was interrupted."),
+            error_key: Some("cancelled"),
             cancelled: true,
             reused: false,
             command_lines: Vec::new(),

@@ -109,7 +109,7 @@ async fn recover(app: tauri::AppHandle, request: RecoverRequest) -> RecoverResul
         engine::recover_with_sink(request, sink, data_dir.as_deref())
     })
     .await
-    .unwrap_or_else(|_| RecoverResult::error("The recovery attempt was interrupted."))
+    .unwrap_or_else(|_| RecoverResult::error("The recovery attempt was interrupted.", "cancelled"))
 }
 
 /// The local recovery history: every password recovered so far on this device.
@@ -238,7 +238,7 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(
             result.message,
-            Some("This password hash could not be read by the recovery engine.")
+            Some("This password hash could not be read.")
         );
     }
 }

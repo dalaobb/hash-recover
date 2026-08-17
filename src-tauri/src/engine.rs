@@ -95,16 +95,19 @@ pub struct ExtractResult {
     pub encryption: Option<String>,
     /// "Easy", "Medium" or "Hard", shown on the file card.
     pub difficulty: Option<&'static str>,
+    /// Non-fatal warning shown on the file card (e.g. oversized hash).
+    pub warning: Option<&'static str>,
 }
 
 fn unavailable() -> ExtractResult {
     ExtractResult {
         ok: false,
         hashes: Vec::new(),
-        message: Some("Recovery engine unavailable. Please reinstall HashRecover."),
+        message: Some("Password recovery for this format is not available."),
         error_key: Some("engine_unavailable"),
         encryption: None,
         difficulty: None,
+        warning: None,
     }
 }
 
@@ -117,6 +120,7 @@ impl ExtractResult {
             error_key: None,
             encryption: None,
             difficulty: None,
+            warning: None,
         }
     }
 }
@@ -155,9 +159,11 @@ pub fn recover_with_sink(
     let normalized = match normalizer::normalize_hash(&request.hash) {
         Ok(n) => n,
         Err(_) => {
+            crate::logging::event("engine", "recover", "hash_unreadable", None);
             return RecoverResult::error(
-                "This password hash could not be read by the recovery engine.",
-            )
+                "This password hash could not be read.",
+                "hash_unreadable",
+            );
         }
     };
 
@@ -171,14 +177,18 @@ pub fn recover_with_sink(
         Some(ws) => ws,
         None => {
             return RecoverResult::error(
-                "Could not create temporary files for this recovery attempt.",
+                "Could not create temporary files.",
+                "temp_workspace_failed",
             )
         }
     };
 
     let files = match prepare_attack_files(&request, &workspace) {
         Ok(files) => files,
-        Err(e) => return RecoverResult::error(e.friendly()),
+        Err(e) => {
+            let (msg, key) = e.friendly();
+            return RecoverResult::error(msg, key);
+        }
     };
     if cancelled() {
         return RecoverResult::cancelled();
@@ -186,40 +196,71 @@ pub fn recover_with_sink(
 
     let attack_args = match attack::build_attack(&request.strategy, &files) {
         Ok(a) => a,
-        Err(e) => return RecoverResult::error(e.friendly()),
+        Err(e) => {
+            let (msg, key) = e.friendly();
+            return RecoverResult::error(msg, key);
+        }
     };
 
     let Some(hashcat_file) = workspace.write("hash.txt", &normalized.hash) else {
-        return RecoverResult::error("Could not prepare the password hash for recovery.");
+        return RecoverResult::error(
+            "Could not prepare the password hash.",
+            "hash_prepare_failed",
+        );
     };
 
     // Collect the exact command lines invoked so the UI can log them for
     // debugging (in addition to the live structured log in spawn_tracked).
     let mut commands: Vec<String> = Vec::new();
 
+    // Hashcat has architecture-dependent hash line limits for archive formats
+    // because the hash includes compressed data for password verification.
+    // When the hash exceeds the limit, skip hashcat and let John handle it —
+    // John has no length restriction.
+    //
+    //   ZIP  (17200/17220): ~8 KB limit
+    //   7z   (11600):       ~320 KB limit
+    //   RAR3 (12500):       no limit (fixed-format hash, no compressed data)
+    //   RAR5 (13000):       no limit (fixed-format hash, no compressed data)
+    let hash_too_long_for_hashcat = match normalized.hashcat_mode {
+        Some(17200 | 17220) => normalized.hash.len() > 8192,
+        Some(11600) => normalized.hash.len() > 320_000,
+        _ => false,
+    };
+
     // Hashcat first when this hash has a supported mode.
     if let Some(mode) = normalized.hashcat_mode {
-        if let Some(hashcat) = resolve_program("hashcat") {
-            match run_hashcat(
-                &hashcat,
-                mode,
-                &hashcat_file,
-                &attack_args.hashcat_args,
-                sink.clone(),
-                &mut commands,
-            ) {
-                HashcatOutcome::Cracked(password) => {
-                    record_history(history_dir, &request, &normalized, "hashcat", &password);
-                    return ok_result(password, &commands);
-                }
-                HashcatOutcome::NotFound => {
-                    if cancelled() {
-                        return RecoverResult::cancelled();
+        if hash_too_long_for_hashcat {
+            crate::logging::event(
+                "engine",
+                "hashcat",
+                "skip_oversized",
+                Some(&format!("hash_len={}", normalized.hash.len())),
+            );
+        }
+        if !hash_too_long_for_hashcat {
+            if let Some(hashcat) = resolve_program("hashcat") {
+                match run_hashcat(
+                    &hashcat,
+                    mode,
+                    &hashcat_file,
+                    &attack_args.hashcat_args,
+                    sink.clone(),
+                    &mut commands,
+                ) {
+                    HashcatOutcome::Cracked(password) => {
+                        record_history(history_dir, &request, &normalized, "hashcat", &password);
+                        return ok_result(password, &commands);
                     }
-                    return not_found(&commands);
+                    HashcatOutcome::NotFound => {
+                        if cancelled() {
+                            return RecoverResult::cancelled();
+                        }
+                        return not_found(&commands);
+                    }
+                    // NoHashesLoaded / Error: fall through and let John try.
+                    _ => {}
                 }
-                // NoHashesLoaded / Error: fall through and let John try.
-                _ => {}
             }
         }
         if cancelled() {
@@ -228,8 +269,10 @@ pub fn recover_with_sink(
         // The combinator attack has no John fallback; if Hashcat did not
         // succeed it is simply unavailable.
         if matches!(request.strategy.kind, StrategyKind::Combinator) {
+            crate::logging::event("engine", "recover", "combinator_no_hashcat", None);
             return RecoverResult::error(
-                "Recovery engine unavailable. Please reinstall HashRecover.",
+                "This recovery method is not available in your current version.",
+                "method_unavailable",
             );
         }
     }
@@ -240,7 +283,10 @@ pub fn recover_with_sink(
             let display_name = john_login_name(normalized.filename.as_deref());
             let john_input = format!("{display_name}:{}", normalized.hash);
             let Some(john_file) = workspace.write("john.txt", &john_input) else {
-                return RecoverResult::error("Could not prepare the password hash for recovery.");
+                return RecoverResult::error(
+                    "Could not prepare the password hash.",
+                    "hash_prepare_failed",
+                );
             };
             let pot_file = workspace.path("john.pot");
             match run_john(
@@ -271,7 +317,7 @@ pub fn recover_with_sink(
     if cancelled() {
         return RecoverResult::cancelled();
     }
-    RecoverResult::error("Recovery engine unavailable. Please reinstall HashRecover.")
+    RecoverResult::error("No recovery engine is available.", "engine_unavailable")
 }
 
 /// Resolve the wordlist/rules files a strategy needs. Historical passwords
@@ -782,6 +828,7 @@ fn ok_result(password: String, commands: &[String]) -> RecoverResult {
         ok: true,
         password: Some(password),
         message: None,
+        error_key: None,
         cancelled: false,
         reused: false,
         command_lines: commands.to_vec(),
@@ -793,6 +840,7 @@ fn reused_result(password: String) -> RecoverResult {
         ok: true,
         password: Some(password),
         message: None,
+        error_key: None,
         cancelled: false,
         reused: true,
         command_lines: Vec::new(),
@@ -804,6 +852,7 @@ fn not_found(commands: &[String]) -> RecoverResult {
         ok: false,
         password: None,
         message: None,
+        error_key: None,
         cancelled: false,
         reused: false,
         command_lines: commands.to_vec(),
@@ -1173,6 +1222,12 @@ fn bundled_bin_dirs() -> Vec<PathBuf> {
     if let Some(root) = resource_root() {
         dirs.push(root.join("bin"));
     }
+    // Development: cargo builds extractors into CARGO_MANIFEST_DIR/target/{debug,release}.
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    #[cfg(debug_assertions)]
+    dirs.push(manifest.join("target").join("debug"));
+    #[cfg(not(debug_assertions))]
+    dirs.push(manifest.join("target").join("release"));
     dirs
 }
 
@@ -1306,32 +1361,6 @@ fn engine_data_dirs() -> Vec<PathBuf> {
 // Extractor runner (unchanged contract)
 // ---------------------------------------------------------------------------
 
-/// Locate an extractor binary. In development builds it resolves to the
-/// workspace build output; packaged builds resolve through the sidecar
-/// directory instead (see bundling phase).
-fn resolve_extractor(extractor: &str) -> Option<PathBuf> {
-    #[cfg(debug_assertions)]
-    let profile = "debug";
-    #[cfg(not(debug_assertions))]
-    let profile = "release";
-
-    let name = format!("{extractor}{}", std::env::consts::EXE_SUFFIX);
-
-    let candidates = [
-        std::env::current_dir()
-            .ok()?
-            .join("target")
-            .join(profile)
-            .join(&name),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(profile)
-            .join(&name),
-    ];
-
-    candidates.into_iter().find(|p| is_executable(p))
-}
-
 fn is_executable(path: &Path) -> bool {
     if !path.is_file() {
         return false;
@@ -1353,11 +1382,8 @@ fn is_executable(path: &Path) -> bool {
 /// lines it produced, translating process results into friendly messages.
 /// The caller is responsible for variant support checks.
 pub fn extract(family: Family, path: &Path) -> ExtractResult {
-    let Some(binary) = resolve_extractor(family.extractor()) else {
-        log::warn!(
-            "extractor {} binary not found in target/debug or target/release",
-            family.extractor()
-        );
+    let Some(binary) = resolve_program(family.extractor()) else {
+        log::warn!("extractor {} binary not found", family.extractor());
         return unavailable();
     };
 
@@ -1379,14 +1405,26 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
         .unwrap_or((None, None));
 
     match output.status.code() {
-        Some(0) if !hashes.is_empty() => ExtractResult {
-            ok: true,
-            hashes,
-            message: None,
-            error_key: None,
-            encryption: describe.0,
-            difficulty: describe.1,
-        },
+        Some(0) if !hashes.is_empty() => {
+            // Warn when the hash is too long for hashcat — John will be used instead.
+            let hash_len = hashes.first().map_or(0, |h| h.len());
+            let warning = if matches!(family, Family::Zip) && hash_len > 8192 {
+                Some("The password hash is very long. Hashcat may not work; John the Ripper will be used.")
+            } else if matches!(family, Family::SevenZ) && hash_len > 320_000 {
+                Some("The password hash is very long. Hashcat may not work; John the Ripper will be used.")
+            } else {
+                None
+            };
+            ExtractResult {
+                ok: true,
+                hashes,
+                message: None,
+                error_key: None,
+                encryption: describe.0,
+                difficulty: describe.1,
+                warning,
+            }
+        }
         Some(0) => ExtractResult {
             ok: false,
             hashes: Vec::new(),
@@ -1396,6 +1434,7 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
             error_key: Some("no_hash"),
             encryption: None,
             difficulty: None,
+            warning: None,
         },
         Some(2) => ExtractResult {
             ok: false,
@@ -1404,6 +1443,7 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
             error_key: Some("not_encrypted"),
             encryption: None,
             difficulty: None,
+            warning: None,
         },
         _ => ExtractResult {
             ok: false,
@@ -1412,6 +1452,7 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
             error_key: Some("extraction_failed"),
             encryption: None,
             difficulty: None,
+            warning: None,
         },
     }
 }
@@ -1463,7 +1504,7 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(
             result.message,
-            Some("Recovery engine unavailable. Please reinstall HashRecover.")
+            Some("Password recovery for this format is not available.")
         );
     }
 
@@ -1481,7 +1522,7 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(
             result.message,
-            Some("This password hash could not be read by the recovery engine.")
+            Some("This password hash could not be read.")
         );
     }
 
@@ -1503,10 +1544,7 @@ mod tests {
         };
         let result = recover(request);
         assert!(!result.ok);
-        assert_eq!(
-            result.message,
-            Some("Recovery engine unavailable. Please reinstall HashRecover.")
-        );
+        assert_eq!(result.message, Some("No recovery engine is available."));
     }
 
     #[test]
@@ -1515,6 +1553,39 @@ mod tests {
             resolve_dictionary(attack::DEFAULT_DICTIONARY).is_some(),
             "default dictionary must be resolvable"
         );
+    }
+
+    #[test]
+    fn long_zip_hash_skips_hashcat() {
+        // A ZIP hash over 8192 bytes should be flagged as too long for hashcat.
+        let long_payload = "a".repeat(9000);
+        let hash = format!("$zip2$*0*3*0*aaaa*1024*{long_payload}*bbbb*1024*$/zip2$");
+        assert!(hash.len() > 8192);
+        let n = normalizer::normalize_hash(&hash).unwrap();
+        assert_eq!(n.hashcat_mode, Some(17200));
+        let too_long = matches!(n.hashcat_mode, Some(17200 | 17220)) && n.hash.len() > 8192;
+        assert!(too_long, "long ZIP hash should be flagged");
+    }
+
+    #[test]
+    fn long_7z_hash_skips_hashcat() {
+        // A 7z hash over 320 KB should be flagged as too long for hashcat.
+        let long_payload = "a".repeat(350_000);
+        let hash = format!("$7z$*0*0*0*0*0*0*0*0*{long_payload}");
+        assert!(hash.len() > 320_000);
+        let n = normalizer::normalize_hash(&hash).unwrap();
+        assert_eq!(n.hashcat_mode, Some(11600));
+        let too_long = n.hashcat_mode == Some(11600) && n.hash.len() > 320_000;
+        assert!(too_long, "long 7z hash should be flagged");
+    }
+
+    #[test]
+    fn rar_hash_never_too_long() {
+        // RAR hashes are fixed-format and never exceed limits.
+        let n = normalizer::normalize_hash("$rar3$*0*aaaa*bbbb").unwrap();
+        assert_eq!(n.hashcat_mode, Some(12500));
+        let too_long = matches!(n.hashcat_mode, Some(17200 | 17220 | 11600)) && n.hash.len() > 8192;
+        assert!(!too_long, "RAR hash should never be flagged");
     }
 
     #[test]

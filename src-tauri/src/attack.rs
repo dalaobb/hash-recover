@@ -64,14 +64,16 @@ pub enum AttackError {
 }
 
 impl AttackError {
-    pub fn friendly(&self) -> &'static str {
+    pub fn friendly(&self) -> (&'static str, &'static str) {
         match self {
-            AttackError::MissingWordlist => {
-                "The word list is not available. Please reinstall HashRecover."
-            }
-            AttackError::MissingRules => {
-                "The password rules are not available. Please reinstall HashRecover."
-            }
+            AttackError::MissingWordlist => (
+                "The required password dictionary is not available.",
+                "missing_wordlist",
+            ),
+            AttackError::MissingRules => (
+                "The required password rules are not available.",
+                "missing_rules",
+            ),
         }
     }
 }

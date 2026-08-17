@@ -1,17 +1,20 @@
 import { useState } from "react";
-import { useRecovery } from "../store/recovery";
+import { useRecovery, translateResultMessage } from "../store/recovery";
 import { useT } from "../lib/i18n";
+import { useSettings } from "../store/settings";
 
 export function ResultView() {
   const result = useRecovery((s) => s.result);
   const backToConfigure = useRecovery((s) => s.backToConfigure);
   const reset = useRecovery((s) => s.reset);
+  const lang = useSettings((s) => s.language);
   const t = useT();
   const [copied, setCopied] = useState(false);
 
   const recovered = Boolean(result?.ok && result.password);
   const cancelled = Boolean(result?.cancelled);
   const password = result?.password ?? "";
+  const resultMessage = translateResultMessage(result, lang);
 
   async function copy() {
     try {
@@ -59,7 +62,7 @@ export function ResultView() {
           <>
             <h2 className="text-lg font-semibold">{t("result.notFound")}</h2>
             <p className="text-sm leading-relaxed text-text-muted">
-              {result?.message ?? t("result.notFoundBody")}
+              {resultMessage ?? t("result.notFoundBody")}
             </p>
           </>
         )}

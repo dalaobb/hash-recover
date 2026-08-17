@@ -33,7 +33,7 @@ const en = {
     chooseAnother: "Choose another file",
     extraction: {
       engineUnavailable:
-        "Recovery engine unavailable. Please reinstall HashRecover.",
+        "Password recovery for this format is not available.",
       noHash:
         "This file was read successfully, but no password hash was found inside.",
       notEncrypted: "This file does not appear to be password-protected.",
@@ -215,6 +215,15 @@ const en = {
     differentMethod: "Try a different method",
     another: "Recover another password",
     anotherFile: "Choose another file",
+    error: {
+      hashUnreadable: "This password hash could not be read.",
+      tempWorkspaceFailed: "Could not create temporary files.",
+      hashPrepareFailed: "Could not prepare the password hash.",
+      methodUnavailable: "This recovery method is not available in your current version.",
+      engineUnavailable: "No recovery engine is available.",
+      missingWordlist: "The required password dictionary is not available.",
+      missingRules: "The required password rules are not available.",
+    },
   },
   history: {
     title: "Recovery history",
@@ -290,7 +299,7 @@ const zh: typeof en = {
     couldNotAnalyze: "无法分析此文件",
     chooseAnother: "选择另一个文件",
     extraction: {
-      engineUnavailable: "恢复引擎不可用，请重新安装 HashRecover。",
+      engineUnavailable: "当前版本不支持此格式的密码恢复。",
       noHash: "文件读取成功，但未在其中找到密码哈希。",
       notEncrypted: "此文件似乎没有设置密码保护。",
       extractionFailed:
@@ -470,6 +479,15 @@ const zh: typeof en = {
     differentMethod: "换一种方式尝试",
     another: "恢复另一个密码",
     anotherFile: "选择另一个文件",
+    error: {
+      hashUnreadable: "无法识别此文件的密码格式。",
+      tempWorkspaceFailed: "无法创建临时文件。",
+      hashPrepareFailed: "无法准备密码哈希。",
+      methodUnavailable: "当前版本不支持此恢复方式。",
+      engineUnavailable: "恢复引擎不可用。",
+      missingWordlist: "所需的密码词典不可用。",
+      missingRules: "所需的密码规则不可用。",
+    },
   },
   history: {
     title: "恢复历史记录",

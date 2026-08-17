@@ -86,6 +86,9 @@ export function FileSummary() {
               </span>
             </span>
           )}
+          {extraction?.warning && (
+            <span className="text-yellow-400">{extraction.warning}</span>
+          )}
         </div>
       </div>
     </div>

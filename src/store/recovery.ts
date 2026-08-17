@@ -53,6 +53,30 @@ const EXTRACTION_ERROR_I18N: Record<string, string> = {
   extraction_failed: "analysis.extraction.extractionFailed",
 };
 
+/** Maps Rust RecoverResult error_key values to i18n message keys. */
+const RECOVER_ERROR_I18N: Record<string, string> = {
+  hash_unreadable: "result.error.hashUnreadable",
+  temp_workspace_failed: "result.error.tempWorkspaceFailed",
+  hash_prepare_failed: "result.error.hashPrepareFailed",
+  method_unavailable: "result.error.methodUnavailable",
+  engine_unavailable: "result.error.engineUnavailable",
+  missing_wordlist: "result.error.missingWordlist",
+  missing_rules: "result.error.missingRules",
+  cancelled: "result.error.cancelled",
+};
+
+/** Translate a RecoverResult message using its error_key. */
+export function translateResultMessage(
+  result: RecoverResult | null,
+  lang: "en" | "zh",
+): string | null {
+  if (!result) return null;
+  if (result.errorKey && RECOVER_ERROR_I18N[result.errorKey]) {
+    return translate(lang, RECOVER_ERROR_I18N[result.errorKey] as any);
+  }
+  return result.message;
+}
+
 interface RecoveryState {
   phase: Phase;
   filePath: string | null;
