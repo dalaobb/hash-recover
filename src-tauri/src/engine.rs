@@ -81,6 +81,8 @@ pub struct ExtractResult {
     pub hashes: Vec<String>,
     /// User-facing failure message when `ok` is false.
     pub message: Option<&'static str>,
+    /// Machine-readable error key for i18n (e.g. "not_encrypted", "extraction_failed").
+    pub error_key: Option<&'static str>,
     /// Friendly encryption name (e.g. "AES-256") shown on the file card.
     pub encryption: Option<String>,
     /// "Easy", "Medium" or "Hard", shown on the file card.
@@ -92,6 +94,7 @@ fn unavailable() -> ExtractResult {
         ok: false,
         hashes: Vec::new(),
         message: Some("Recovery engine unavailable. Please reinstall HashRecover."),
+        error_key: Some("engine_unavailable"),
         encryption: None,
         difficulty: None,
     }
@@ -103,6 +106,7 @@ impl ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some(message),
+            error_key: None,
             encryption: None,
             difficulty: None,
         }
@@ -1339,13 +1343,17 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
             ok: true,
             hashes,
             message: None,
+            error_key: None,
             encryption: describe.0,
             difficulty: describe.1,
         },
         Some(0) => ExtractResult {
             ok: false,
             hashes: Vec::new(),
-            message: Some("No recoverable hash was found in this file."),
+            message: Some(
+                "This file was read successfully, but no password hash was found inside.",
+            ),
+            error_key: Some("no_hash"),
             encryption: None,
             difficulty: None,
         },
@@ -1353,6 +1361,7 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some("This file does not appear to be password-protected."),
+            error_key: Some("not_encrypted"),
             encryption: None,
             difficulty: None,
         },
@@ -1360,6 +1369,7 @@ pub fn extract(family: Family, path: &Path) -> ExtractResult {
             ok: false,
             hashes: Vec::new(),
             message: Some("Could not extract a password hash from this file."),
+            error_key: Some("extraction_failed"),
             encryption: None,
             difficulty: None,
         },

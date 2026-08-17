@@ -31,6 +31,15 @@ const en = {
     detecting: "Detecting format and extracting the password hash…",
     couldNotAnalyze: "Could not analyze this file",
     chooseAnother: "Choose another file",
+    extraction: {
+      engineUnavailable:
+        "Recovery engine unavailable. Please reinstall HashRecover.",
+      noHash:
+        "This file was read successfully, but no password hash was found inside.",
+      notEncrypted: "This file does not appear to be password-protected.",
+      extractionFailed:
+        "Could not extract a password hash from this file. The file may be corrupted or not actually encrypted.",
+    },
   },
   fileSummary: {
     encryption: "Encryption: {value}",
@@ -277,6 +286,13 @@ const zh: typeof en = {
     detecting: "正在检测格式并提取密码哈希…",
     couldNotAnalyze: "无法分析此文件",
     chooseAnother: "选择另一个文件",
+    extraction: {
+      engineUnavailable: "恢复引擎不可用，请重新安装 HashRecover。",
+      noHash: "文件读取成功，但未在其中找到密码哈希。",
+      notEncrypted: "此文件似乎没有设置密码保护。",
+      extractionFailed:
+        "无法从此文件提取密码哈希。文件可能已损坏或实际上并未加密。",
+    },
   },
   fileSummary: {
     encryption: "加密方式：{value}",

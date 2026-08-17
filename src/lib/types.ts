@@ -11,6 +11,8 @@ export interface ExtractResult {
   ok: boolean;
   hashes: string[];
   message: string | null;
+  /** Machine-readable error key for i18n (e.g. "not_encrypted", "extraction_failed"). */
+  errorKey: string | null;
   /** Friendly encryption name (e.g. "AES-256"), shown on the file card. */
   encryption: string | null;
   /** "Easy", "Medium" or "Hard", shown on the file card. */

@@ -24,6 +24,8 @@ import type {
   RecoveryProgress,
   RecoveryStrategy,
 } from "../lib/types";
+import { translate } from "../lib/i18n";
+import { useSettings } from "./settings";
 
 export type Phase =
   | "select"
@@ -42,6 +44,14 @@ export type SubKnowledge = "11" | "12" | "13";
 export type DictionaryChoice = "default" | "custom";
 /** Variation level applied to wordlist attacks (rule sets per engine). */
 export type RuleLevel = "simple" | "deep" | "extreme";
+
+/** Maps Rust error_key values to i18n message keys. */
+const EXTRACTION_ERROR_I18N: Record<string, string> = {
+  engine_unavailable: "analysis.extraction.engineUnavailable",
+  no_hash: "analysis.extraction.noHash",
+  not_encrypted: "analysis.extraction.notEncrypted",
+  extraction_failed: "analysis.extraction.extractionFailed",
+};
 
 interface RecoveryState {
   phase: Phase;
@@ -158,10 +168,17 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
 
     const extracted = await extractHash(filePath);
     if (!extracted.ok) {
+      const lang = useSettings.getState().language;
+      const i18nKey =
+        extracted.errorKey && EXTRACTION_ERROR_I18N[extracted.errorKey]
+          ? (EXTRACTION_ERROR_I18N[extracted.errorKey] as any)
+          : null;
       set({
         phase: "rejected",
         analysis,
-        rejectionMessage: extracted.message ?? "Could not read the password hash.",
+        rejectionMessage: i18nKey
+          ? translate(lang, i18nKey)
+          : extracted.message ?? "Could not read the password hash.",
       });
       return;
     }
