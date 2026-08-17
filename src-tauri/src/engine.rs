@@ -202,6 +202,18 @@ pub fn recover_with_sink(
         }
     };
 
+    crate::logging::event(
+        "engine",
+        "recover",
+        "normalized",
+        Some(&format!(
+            "hashcat_mode={:?} john_format={:?} hash_len={}",
+            normalized.hashcat_mode,
+            normalized.john_format,
+            normalized.hash.len()
+        )),
+    );
+
     let Some(hashcat_file) = workspace.write("hash.txt", &normalized.hash) else {
         return RecoverResult::error(
             "Could not prepare the password hash.",
@@ -279,7 +291,21 @@ pub fn recover_with_sink(
 
     // John fallback, and the only engine for Hashcat-less hashes.
     if let Some(john_format) = normalized.john_format {
-        if let Some(john) = resolve_program("john") {
+        let john_path = resolve_program("john");
+        crate::logging::event(
+            "engine",
+            "john_resolve",
+            if john_path.is_some() {
+                "found"
+            } else {
+                "not_found"
+            },
+            john_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .as_deref(),
+        );
+        if let Some(john) = john_path {
             let display_name = john_login_name(normalized.filename.as_deref());
             let john_input = format!("{display_name}:{}", normalized.hash);
             let Some(john_file) = workspace.write("john.txt", &john_input) else {
