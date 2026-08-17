@@ -90,7 +90,7 @@ impl RecoverResult {
         RecoverResult {
             ok: false,
             password: None,
-            message: None,
+            message: Some("The recovery attempt was interrupted."),
             cancelled: true,
             reused: false,
             command_lines: Vec::new(),

@@ -10,6 +10,7 @@ export function ResultView() {
   const [copied, setCopied] = useState(false);
 
   const recovered = Boolean(result?.ok && result.password);
+  const cancelled = Boolean(result?.cancelled);
   const password = result?.password ?? "";
 
   async function copy() {
@@ -26,10 +27,14 @@ export function ResultView() {
     <div className="flex flex-1 flex-col items-center justify-center gap-6 overflow-y-auto p-6">
       <div
         className={`flex h-12 w-12 items-center justify-center rounded-full text-xl ${
-          recovered ? "bg-primary/15 text-primary" : "bg-danger/15 text-danger"
+          recovered
+            ? "bg-primary/15 text-primary"
+            : cancelled
+              ? "bg-yellow-400/15 text-yellow-400"
+              : "bg-danger/15 text-danger"
         }`}
       >
-        {recovered ? "✓" : "!"}
+        {recovered ? "✓" : cancelled ? "—" : "!"}
       </div>
 
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
@@ -42,6 +47,13 @@ export function ResultView() {
             <code className="max-w-full break-all rounded-md border border-primary/40 bg-card px-4 py-2 font-mono text-base text-primary">
               {password}
             </code>
+          </>
+        ) : cancelled ? (
+          <>
+            <h2 className="text-lg font-semibold">{t("result.cancelled")}</h2>
+            <p className="text-sm leading-relaxed text-text-muted">
+              {t("result.cancelledBody")}
+            </p>
           </>
         ) : (
           <>
@@ -69,7 +81,7 @@ export function ResultView() {
             onClick={backToConfigure}
             className="rounded-md bg-card px-6 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-card-hover"
           >
-            {t("result.differentMethod")}
+            {cancelled ? t("result.tryAgain") : t("result.differentMethod")}
           </button>
         )}
         <button

@@ -238,7 +238,7 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
       console.log("[HashRecover] engine command lines:", result.commandLines);
     }
     if (result.cancelled) {
-      set({ phase: "configure", result: null, gpu: null, progress: null, paused: false });
+      set({ phase: "result", result, gpu, progress: null, paused: false });
       return;
     }
     set({ phase: "result", result, gpu, progress: null, paused: false });

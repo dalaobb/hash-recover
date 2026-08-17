@@ -214,7 +214,12 @@ pub fn recover_with_sink(
                     record_history(history_dir, &request, &normalized, "hashcat", &password);
                     return ok_result(password, &commands);
                 }
-                HashcatOutcome::NotFound => return not_found(&commands),
+                HashcatOutcome::NotFound => {
+                    if cancelled() {
+                        return RecoverResult::cancelled();
+                    }
+                    return not_found(&commands);
+                }
                 // NoHashesLoaded / Error: fall through and let John try.
                 _ => {}
             }
@@ -254,7 +259,12 @@ pub fn recover_with_sink(
                     record_history(history_dir, &request, &normalized, "john", &password);
                     return ok_result(password, &commands);
                 }
-                JohnOutcome::NotFound => return not_found(&commands),
+                JohnOutcome::NotFound => {
+                    if cancelled() {
+                        return RecoverResult::cancelled();
+                    }
+                    return not_found(&commands);
+                }
                 JohnOutcome::Error => {}
             }
         }
