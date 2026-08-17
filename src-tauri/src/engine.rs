@@ -10,7 +10,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::attack::{self, AttackFiles};
@@ -28,6 +28,16 @@ static ACTIVE_STDIN: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
 static ACTIVE_SOURCE: Mutex<Option<ProgressSource>> = Mutex::new(None);
 /// Set when the user cancels; `recover` checks it between engine runs.
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+/// Runtime resource directory set by the Tauri layer at startup. Wordlists and
+/// rules bundled as Tauri resources live here; the compile-time
+/// `CARGO_MANIFEST_DIR` path only works in dev builds.
+static RESOURCE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set the runtime resource directory. Called once by the Tauri layer before
+/// any recovery is attempted.
+pub fn set_resource_dir(dir: PathBuf) {
+    let _ = RESOURCE_DIR.set(dir);
+}
 
 /// Live progress pushed to the UI while an engine runs. Every field is
 /// optional: Hashcat exposes tried/total/percent/speed/candidate/eta, John
@@ -1190,6 +1200,10 @@ fn wordlist_dirs() -> Vec<PathBuf> {
     if let Ok(dir) = std::env::var("HASHRECOVER_WORDLISTS") {
         dirs.push(PathBuf::from(dir));
     }
+    if let Some(dir) = RESOURCE_DIR.get() {
+        dirs.push(dir.join("wordlists"));
+    }
+    // Dev builds: CARGO_MANIFEST_DIR points to the project root.
     if let Some(root) = resource_root() {
         dirs.push(root.join("wordlists"));
     }
@@ -1211,6 +1225,9 @@ fn resolve_rules(name: &str) -> Option<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(dir) = std::env::var("HASHRECOVER_RULES") {
         dirs.push(PathBuf::from(dir));
+    }
+    if let Some(dir) = RESOURCE_DIR.get() {
+        dirs.push(dir.join("rules"));
     }
     if let Some(root) = resource_root() {
         dirs.push(root.join("rules"));

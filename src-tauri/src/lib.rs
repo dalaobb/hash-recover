@@ -173,6 +173,13 @@ pub fn run() {
             get_history,
             clear_history
         ])
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(dir) = app.path().resource_dir() {
+                engine::set_resource_dir(dir);
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
