@@ -6,7 +6,7 @@
 //! crashing the app, per the project's error-handling rules.
 
 use serde::Serialize;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -22,8 +22,6 @@ use crate::strategy::{RecoverRequest, RecoverResult, StrategyKind};
 /// Handle of the engine process currently running, so the user can cancel a
 /// recovery attempt from the UI.
 static ACTIVE_CHILD: Mutex<Option<Child>> = Mutex::new(None);
-/// Hashcat's stdin, kept open so its native `p` key can pause/resume it.
-static ACTIVE_STDIN: Mutex<Option<std::process::ChildStdin>> = Mutex::new(None);
 /// Which engine is currently running, so pause/resume picks the right action.
 static ACTIVE_SOURCE: Mutex<Option<ProgressSource>> = Mutex::new(None);
 /// Set when the user cancels; `recover` checks it between engine runs.
@@ -489,14 +487,12 @@ fn spawn_tracked(
         .stderr(std::process::Stdio::piped());
     crate::logging::event("engine", "command", "spawn", Some(&format_command(cmd)));
     let mut child = cmd.spawn()?;
-    let stdin = child.stdin.take();
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     {
         let mut guard = ACTIVE_CHILD.lock().unwrap();
         *guard = Some(child);
     }
-    *ACTIVE_STDIN.lock().unwrap() = stdin;
     *ACTIVE_SOURCE.lock().unwrap() = Some(source);
 
     let out_thread = std::thread::spawn({
@@ -526,7 +522,6 @@ fn spawn_tracked(
         let mut guard = ACTIVE_CHILD.lock().unwrap();
         *guard = None;
     }
-    *ACTIVE_STDIN.lock().unwrap() = None;
     *ACTIVE_SOURCE.lock().unwrap() = None;
 
     let stdout = out_thread.join().unwrap_or_default();
@@ -669,14 +664,6 @@ pub fn resume_recovery() {
         None => {}
     }
     crate::logging::event("engine", "resume", "done", None);
-}
-
-fn write_stdin(data: &[u8]) {
-    if let Ok(mut guard) = ACTIVE_STDIN.lock() {
-        if let Some(stdin) = guard.as_mut() {
-            let _ = stdin.write_all(data);
-        }
-    }
 }
 
 fn active_pid() -> Option<u32> {
