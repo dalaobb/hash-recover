@@ -1,0 +1,11 @@
+[package]
+name = "zip-extractor"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "zip-extractor"
+path = "src/main.rs"
+
+[dependencies]
+extractor-core = { path = "../core" }

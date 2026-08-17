@@ -1498,9 +1498,9 @@ mod tests {
 
     #[test]
     fn missing_extractor_reports_unavailable() {
-        // zip-extractor is not implemented yet, so this exercises the
+        // RAR extractor is not implemented, so this exercises the
         // graceful-degradation path for every variant.
-        let result = extract(Family::Zip, Path::new("/nonexistent/archive.zip"));
+        let result = extract(Family::Rar, Path::new("/nonexistent/archive.rar"));
         assert!(!result.ok);
         assert_eq!(
             result.message,
