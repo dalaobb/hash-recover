@@ -8,6 +8,8 @@ import wordSvg from "../assets/word.svg";
 import excelSvg from "../assets/excel.svg";
 import powerpointSvg from "../assets/powerpoint.svg";
 import pdfSvg from "../assets/pdf.svg";
+import officeSvg from "../assets/office.svg";
+import libreofficeSvg from "../assets/libreoffice.svg";
 
 const FORMAT_SVGS: Record<string, string> = {
   zip: zipSvg,
@@ -17,6 +19,8 @@ const FORMAT_SVGS: Record<string, string> = {
   word: wordSvg,
   excel: excelSvg,
   powerpoint: powerpointSvg,
+  office: officeSvg,
+  libreoffice: libreofficeSvg,
 };
 
 const DIFFICULTY_COLORS: Record<string, string> = {
