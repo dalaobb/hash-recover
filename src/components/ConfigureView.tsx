@@ -24,25 +24,52 @@ type TabId = (typeof TABS)[number]["id"];
 
 const RULE_LEVELS: {
   id: RuleLevel;
-  labelKey: "configure.rules.simple" | "configure.rules.deep" | "configure.rules.extreme";
+  labelKey:
+    | "configure.rules.simple"
+    | "configure.rules.deep"
+    | "configure.rules.extreme";
   descKey:
     | "configure.rules.simpleDesc"
     | "configure.rules.deepDesc"
     | "configure.rules.extremeDesc";
 }[] = [
-  { id: "simple", labelKey: "configure.rules.simple", descKey: "configure.rules.simpleDesc" },
-  { id: "deep", labelKey: "configure.rules.deep", descKey: "configure.rules.deepDesc" },
-  { id: "extreme", labelKey: "configure.rules.extreme", descKey: "configure.rules.extremeDesc" },
+  {
+    id: "simple",
+    labelKey: "configure.rules.simple",
+    descKey: "configure.rules.simpleDesc",
+  },
+  {
+    id: "deep",
+    labelKey: "configure.rules.deep",
+    descKey: "configure.rules.deepDesc",
+  },
+  {
+    id: "extreme",
+    labelKey: "configure.rules.extreme",
+    descKey: "configure.rules.extremeDesc",
+  },
 ];
 
-const GROUP_KEYS: Record<GroupKey, "configure.group.lower" | "configure.group.upper" | "configure.group.digit" | "configure.group.special"> = {
+const GROUP_KEYS: Record<
+  GroupKey,
+  | "configure.group.lower"
+  | "configure.group.upper"
+  | "configure.group.digit"
+  | "configure.group.special"
+> = {
   lower: "configure.group.lower",
   upper: "configure.group.upper",
   digit: "configure.group.digit",
   special: "configure.group.special",
 };
 
-const GROUP_TAB_KEYS: Record<GroupKey, "configure.groupTab.lower" | "configure.groupTab.upper" | "configure.groupTab.digit" | "configure.groupTab.special"> = {
+const GROUP_TAB_KEYS: Record<
+  GroupKey,
+  | "configure.groupTab.lower"
+  | "configure.groupTab.upper"
+  | "configure.groupTab.digit"
+  | "configure.groupTab.special"
+> = {
   lower: "configure.groupTab.lower",
   upper: "configure.groupTab.upper",
   digit: "configure.groupTab.digit",
@@ -71,14 +98,18 @@ function LengthTab() {
         </label>
         {maskConfig.lengthMode === "fixed" && (
           <div className="flex items-center gap-2 pl-6">
-            <span className="text-sm text-text-muted">{t("configure.length.label")}</span>
+            <span className="text-sm text-text-muted">
+              {t("configure.length.label")}
+            </span>
             <input
               type="number"
               min={1}
               max={32}
               value={maskConfig.fixedLength}
               onChange={(e) =>
-                setMaskConfig({ fixedLength: Math.max(1, Number(e.target.value) || 1) })
+                setMaskConfig({
+                  fixedLength: Math.max(1, Number(e.target.value) || 1),
+                })
               }
               className={`${inputCls} w-24`}
             />
@@ -97,25 +128,33 @@ function LengthTab() {
       </label>
       {maskConfig.lengthMode === "range" && (
         <div className="flex items-center gap-2 pl-6">
-          <span className="text-sm text-text-muted">{t("configure.length.from")}</span>
+          <span className="text-sm text-text-muted">
+            {t("configure.length.from")}
+          </span>
           <input
             type="number"
             min={1}
             max={32}
             value={maskConfig.minLength}
             onChange={(e) =>
-              setMaskConfig({ minLength: Math.max(1, Number(e.target.value) || 1) })
+              setMaskConfig({
+                minLength: Math.max(1, Number(e.target.value) || 1),
+              })
             }
             className={`${inputCls} w-24`}
           />
-          <span className="text-sm text-text-muted">{t("configure.length.to")}</span>
+          <span className="text-sm text-text-muted">
+            {t("configure.length.to")}
+          </span>
           <input
             type="number"
             min={1}
             max={32}
             value={maskConfig.maxLength}
             onChange={(e) =>
-              setMaskConfig({ maxLength: Math.max(1, Number(e.target.value) || 1) })
+              setMaskConfig({
+                maxLength: Math.max(1, Number(e.target.value) || 1),
+              })
             }
             className={`${inputCls} w-24`}
           />
@@ -194,9 +233,9 @@ function OverviewTab() {
   const charset = buildCharset(maskConfig);
   const t = useT();
 
-  const groups: { key: GroupKey; count: number }[] = (["lower", "upper", "digit", "special"] as GroupKey[]).map(
-    (key) => ({ key, count: GROUP_CHARS[key].length }),
-  );
+  const groups: { key: GroupKey; count: number }[] = (
+    ["lower", "upper", "digit", "special"] as GroupKey[]
+  ).map((key) => ({ key, count: GROUP_CHARS[key].length }));
 
   return (
     <div className="flex flex-col gap-4 text-sm">
@@ -204,7 +243,9 @@ function OverviewTab() {
         <table className="w-full">
           <tbody className="divide-y divide-border">
             <tr>
-              <td className="py-1.5 text-text-muted">{t("configure.overview.length")}</td>
+              <td className="py-1.5 text-text-muted">
+                {t("configure.overview.length")}
+              </td>
               <td className="py-1.5 text-right">
                 {min === max
                   ? t("configure.overview.characters", { count: min })
@@ -212,12 +253,20 @@ function OverviewTab() {
               </td>
             </tr>
             <tr>
-              <td className="py-1.5 text-text-muted">{t("configure.overview.startsWith")}</td>
-              <td className="py-1.5 text-right font-mono">{maskConfig.prefix || "—"}</td>
+              <td className="py-1.5 text-text-muted">
+                {t("configure.overview.startsWith")}
+              </td>
+              <td className="py-1.5 text-right font-mono">
+                {maskConfig.prefix || "—"}
+              </td>
             </tr>
             <tr>
-              <td className="py-1.5 text-text-muted">{t("configure.overview.endsWith")}</td>
-              <td className="py-1.5 text-right font-mono">{maskConfig.suffix || "—"}</td>
+              <td className="py-1.5 text-text-muted">
+                {t("configure.overview.endsWith")}
+              </td>
+              <td className="py-1.5 text-right font-mono">
+                {maskConfig.suffix || "—"}
+              </td>
             </tr>
             {groups.map(({ key, count }) => {
               const g = maskConfig[key];
@@ -225,27 +274,38 @@ function OverviewTab() {
               const none = !g.all && g.selected.length === 0;
               return (
                 <tr key={key}>
-                  <td className="py-1.5 text-text-muted">{t(GROUP_KEYS[key])}</td>
+                  <td className="py-1.5 text-text-muted">
+                    {t(GROUP_KEYS[key])}
+                  </td>
                   <td className="py-1.5 text-right">
                     {full
                       ? t("configure.overview.all", { count })
                       : none
                         ? t("configure.overview.excluded")
-                        : t("configure.overview.of", { selected: g.selected.length, count })}
+                        : t("configure.overview.of", {
+                            selected: g.selected.length,
+                            count,
+                          })}
                   </td>
                 </tr>
               );
             })}
             <tr>
-              <td className="py-1.5 text-text-muted">{t("configure.overview.characterSet")}</td>
+              <td className="py-1.5 text-text-muted">
+                {t("configure.overview.characterSet")}
+              </td>
               <td className="py-1.5 text-right font-mono">
-                {charset === "all" ? t("configure.overview.allPrintable") : charset}
+                {charset === "all"
+                  ? t("configure.overview.allPrintable")
+                  : charset}
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p className="text-xs leading-relaxed text-text-muted">{t("configure.overview.note")}</p>
+      <p className="text-xs leading-relaxed text-text-muted">
+        {t("configure.overview.note")}
+      </p>
     </div>
   );
 }
@@ -280,7 +340,9 @@ function PartialConfig() {
         <p className="text-xs text-text-muted">{t("configure.history.note")}</p>
 
         <div className="mt-1 flex flex-col gap-1.5">
-          <span className="text-sm text-text-muted">{t("configure.rules.level")}</span>
+          <span className="text-sm text-text-muted">
+            {t("configure.rules.level")}
+          </span>
           <div className="flex flex-col gap-1.5">
             {RULE_LEVELS.map((level) => {
               const selected = ruleLevel === level.id;
@@ -301,7 +363,9 @@ function PartialConfig() {
                   />
                   <span>
                     <span className="font-semibold">{t(level.labelKey)}</span>
-                    <span className="block text-xs text-text-muted">{t(level.descKey)}</span>
+                    <span className="block text-xs text-text-muted">
+                      {t(level.descKey)}
+                    </span>
                   </span>
                 </label>
               );
@@ -400,7 +464,7 @@ function CommonConfig() {
 
   return (
     <div className="flex flex-col gap-2.5">
-      <label className="flex items-start gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
+      <label className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
         <input
           type="radio"
           className="mt-0.5 accent-primary"
@@ -415,7 +479,7 @@ function CommonConfig() {
         </span>
       </label>
 
-      <label className="flex items-start gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
+      <label className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
         <input
           type="radio"
           className="mt-0.5 accent-primary"
@@ -424,7 +488,9 @@ function CommonConfig() {
         />
         <span>
           <span className="font-semibold">{t("configure.common.custom")}</span>
-          <span className="block text-xs text-text-muted">{t("configure.common.customDesc")}</span>
+          <span className="block text-xs text-text-muted">
+            {t("configure.common.customDesc")}
+          </span>
         </span>
       </label>
 
@@ -443,7 +509,7 @@ function CommonConfig() {
         </div>
       )}
 
-      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
+      <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
         <input
           type="checkbox"
           className="mt-0.5 accent-primary"
@@ -451,7 +517,9 @@ function CommonConfig() {
           onChange={(e) => setUseRules(e.target.checked)}
         />
         <span>
-          <span className="font-semibold">{t("configure.rules.dictionaryToggle")}</span>
+          <span className="font-semibold">
+            {t("configure.rules.dictionaryToggle")}
+          </span>
           <span className="block text-xs text-text-muted">
             {t("configure.rules.dictionaryToggleDesc")}
           </span>
@@ -466,11 +534,15 @@ function NoIdeaConfig() {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm leading-relaxed text-text-muted">{t("configure.noIdea.note")}</p>
+      <p className="text-sm leading-relaxed text-text-muted">
+        {t("configure.noIdea.note")}
+      </p>
       <div className="rounded-md border border-border bg-card p-4 text-sm">
         <span className="text-text-muted">{t("configure.noIdea.length")}</span>{" "}
         {t("configure.noIdea.oneTo16")}
-        <span className="ml-4 text-text-muted">{t("configure.noIdea.characters")}</span>{" "}
+        <span className="ml-4 text-text-muted">
+          {t("configure.noIdea.characters")}
+        </span>{" "}
         {t("configure.noIdea.allPrintable")}
       </div>
     </div>
@@ -493,9 +565,13 @@ export function ConfigureView() {
     knowledge !== "partial" ||
     subKnowledge === "11" ||
     (subKnowledge === "12" && history.trim().length > 0) ||
-    (subKnowledge === "13" && partA.trim().length > 0 && partB.trim().length > 0);
+    (subKnowledge === "13" &&
+      partA.trim().length > 0 &&
+      partB.trim().length > 0);
   const needsDictionary =
-    knowledge === "common" && dictionaryChoice === "custom" && !customDictionaryPath;
+    knowledge === "common" &&
+    dictionaryChoice === "custom" &&
+    !customDictionaryPath;
 
   return (
     <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-6">

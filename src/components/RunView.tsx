@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useRecovery } from "../store/recovery";
 import { FileSummary } from "./FileSummary";
@@ -29,14 +29,33 @@ export function RunView() {
   const setProgress = useRecovery((s) => s.setProgress);
   const t = useT();
   const [elapsed, setElapsed] = useState(0);
+  const pausedAtRef = useRef<number | null>(null);
+  const totalPausedMsRef = useRef(0);
 
   useEffect(() => {
     const startedAt = Date.now();
     const id = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+      const pauseOffset = pausedAtRef.current
+        ? Date.now() - pausedAtRef.current
+        : 0;
+      setElapsed(
+        Math.floor(
+          (Date.now() - startedAt - totalPausedMsRef.current - pauseOffset) /
+            1000,
+        ),
+      );
     }, 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (paused) {
+      pausedAtRef.current = Date.now();
+    } else if (pausedAtRef.current !== null) {
+      totalPausedMsRef.current += Date.now() - pausedAtRef.current;
+      pausedAtRef.current = null;
+    }
+  }, [paused]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -91,7 +110,7 @@ export function RunView() {
           <div
             className="h-full rounded-full bg-primary transition-[width] duration-700"
             style={{
-              width: percent !== null ? `${Math.min(100, percent)}%` : undefined,
+              width: percent !== null ? `${Math.min(100, percent)}%` : "0%",
             }}
           >
             {percent === null && <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />}

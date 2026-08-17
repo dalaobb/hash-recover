@@ -653,20 +653,22 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
 /// Pause the running engine. Hashcat pauses natively when `p` is sent to its
 /// stdin; John is suspended with an OS signal (SIGSTOP / NtSuspendProcess).
 pub fn pause_recovery() {
+    crate::logging::event("engine", "pause", "start", None);
     match *ACTIVE_SOURCE.lock().unwrap() {
-        Some(ProgressSource::Hashcat) => write_stdin(b"p"),
-        Some(ProgressSource::John) => suspend_active(),
+        Some(ProgressSource::Hashcat) | Some(ProgressSource::John) => suspend_active(),
         None => {}
     }
+    crate::logging::event("engine", "pause", "done", None);
 }
 
 /// Resume a paused engine.
 pub fn resume_recovery() {
+    crate::logging::event("engine", "resume", "start", None);
     match *ACTIVE_SOURCE.lock().unwrap() {
-        Some(ProgressSource::Hashcat) => write_stdin(b"p"),
-        Some(ProgressSource::John) => resume_active(),
+        Some(ProgressSource::Hashcat) | Some(ProgressSource::John) => resume_active(),
         None => {}
     }
+    crate::logging::event("engine", "resume", "done", None);
 }
 
 fn write_stdin(data: &[u8]) {
