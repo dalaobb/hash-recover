@@ -1183,15 +1183,33 @@ fn resource_root() -> Option<PathBuf> {
 fn resolve_dictionary(name: &str) -> Option<PathBuf> {
     let p = PathBuf::from(name);
     if p.is_file() {
+        crate::logging::event(
+            "engine",
+            "resolve_dict",
+            "literal",
+            Some(&p.display().to_string()),
+        );
         return Some(p);
     }
     let stem = name.strip_suffix(".txt").unwrap_or(name);
     for dir in wordlist_dirs() {
         let candidate = dir.join(format!("{stem}.txt"));
         if candidate.is_file() {
+            crate::logging::event(
+                "engine",
+                "resolve_dict",
+                "bundled",
+                Some(&candidate.display().to_string()),
+            );
             return Some(candidate);
         }
     }
+    crate::logging::event(
+        "engine",
+        "resolve_dict",
+        "not_found",
+        Some(&format!("name={name}  dirs={:?}", wordlist_dirs())),
+    );
     None
 }
 

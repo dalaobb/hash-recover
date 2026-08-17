@@ -22,7 +22,7 @@ export function FileSummary() {
   const extraction = useRecovery((s) => s.extraction);
   const t = useT();
 
-  const logo = analysis?.formatId?.toUpperCase().slice(0, 2) ?? "?";
+  const logo = analysis?.formatId?.toUpperCase().slice(0, 6) ?? "?";
   const difficulty = extraction?.difficulty;
 
   return (
