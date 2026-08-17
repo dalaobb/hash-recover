@@ -697,8 +697,12 @@ fn parse_hashcat_frac(value: &str, last: &mut RecoveryProgress) {
     }
 }
 
-/// Parse one John progress line (`--progress-every`): a word like
-/// `0g 0:00:00:07 0.00% (g/s: 5.4M)`. John only reports percentage and speed.
+/// Parse one John progress line (`--progress-every`). John outputs:
+///
+/// Progress: `0g 0:00:00:03 26.19% (ETA: 21:50:09) 0g/s 1134Kp/s ...`
+/// Done:     `1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s ...`
+///
+/// Parsed fields: percent (token 2), speed (`NUMBERg/s` token), ETA (`ETA: HH:MM:SS`).
 fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
     let mut updated = false;
     let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -708,10 +712,23 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
             updated = true;
         }
     }
-    if let Some(idx) = line.find("g/s:") {
-        if let Some(speed) = line[idx + 4..].split_whitespace().next() {
-            last.speed = Some(speed.trim_end_matches([')', ',']).to_string());
+    // Speed: token like "2.178g/s" or "0g/s" (not "1134Kp/s" which ends with "p/s").
+    for token in &tokens {
+        if token.ends_with("g/s") && token.len() > 3 {
+            last.speed = Some((*token).to_string());
             updated = true;
+            break;
+        }
+    }
+    // ETA: "(ETA: 21:50:09)" — John reports wall-clock ETA, not duration.
+    if let Some(idx) = line.find("(ETA:") {
+        let rest = &line[idx + 5..];
+        if let Some(end) = rest.find(')') {
+            let eta = rest[..end].trim();
+            if !eta.is_empty() {
+                last.eta = Some(eta.to_string());
+                updated = true;
+            }
         }
     }
     updated
@@ -1085,11 +1102,14 @@ fn run_john(
         return JohnOutcome::Error;
     }
 
+    // John's --show output format: `login:hash:password`.
+    // rsplit_once(':') extracts the password from the last segment, since
+    // the hash itself may contain colons in some formats.
     let shown = String::from_utf8_lossy(&show.stdout);
     for line in shown.lines() {
-        if let Some((name, rest)) = line.split_once(':') {
-            if name.trim() == display_name && !rest.trim().is_empty() {
-                return JohnOutcome::Cracked(decode_password(rest.trim()));
+        if let Some((prefix, password)) = line.rsplit_once(':') {
+            if !password.is_empty() && prefix.starts_with(display_name) {
+                return JohnOutcome::Cracked(decode_password(password));
             }
         }
     }
@@ -1792,11 +1812,22 @@ mod tests {
     fn john_progress_is_parsed() {
         let mut p = RecoveryProgress::default();
         assert!(parse_john_progress(
-            "0g 0:00:00:07 0.00% (g/s: 5.4M)",
+            "0g 0:00:00:03 26.19% (ETA: 21:50:09) 0g/s 1134Kp/s 1134Kc/s 1134KC/s sean91704..sean-crysta",
             &mut p
         ));
-        assert_eq!(p.percent, Some(0.0));
-        assert_eq!(p.speed.as_deref(), Some("5.4M"));
+        assert_eq!(p.percent, Some(26.19));
+        assert_eq!(p.speed.as_deref(), Some("0g/s"));
+        assert_eq!(p.eta.as_deref(), Some("21:50:09"));
+    }
+
+    #[test]
+    fn john_done_line_parses_speed() {
+        let mut p = RecoveryProgress::default();
+        assert!(parse_john_progress(
+            "1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s 1122Kc/s 1122KC/s 0234065415..0234991515",
+            &mut p
+        ));
+        assert_eq!(p.speed.as_deref(), Some("2.178g/s"));
     }
 
     #[test]
