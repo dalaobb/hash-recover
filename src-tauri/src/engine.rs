@@ -392,7 +392,13 @@ fn prepend_filename_candidates(
     if candidates.is_empty() {
         return Some(wordlist.to_path_buf());
     }
-    let contents = std::fs::read_to_string(wordlist).ok()?;
+    // read_to_string fails on non-UTF-8 wordlists (e.g. rockyou.txt which is
+    // Latin-1). Fall back to the original path; the engines read wordlists as
+    // raw byte streams and handle any encoding.
+    let contents = match std::fs::read_to_string(wordlist) {
+        Ok(c) => c,
+        Err(_) => return Some(wordlist.to_path_buf()),
+    };
     let mut lines = candidates;
     for line in contents.lines() {
         let line = line.trim();
