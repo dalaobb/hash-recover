@@ -46,10 +46,10 @@ export function defaultMaskConfig(): MaskConfig {
     maxLength: 8,
     prefix: "",
     suffix: "",
-    lower: { all: true, selected: [] },
-    upper: { all: true, selected: [] },
-    digit: { all: true, selected: [] },
-    special: { all: true, selected: [] },
+    lower: { all: false, selected: [] },
+    upper: { all: false, selected: [] },
+    digit: { all: false, selected: [] },
+    special: { all: false, selected: [] },
   };
 }
 
@@ -85,6 +85,14 @@ function groupString(group: CharGroup, full: string): string {
   if (group.all) return full;
   if (isNone(group)) return "";
   return group.selected.join("");
+}
+
+/** True when at least one character group contributes characters. */
+export function hasCharsetSelection(config: MaskConfig): boolean {
+  const keys: GroupKey[] = ["lower", "upper", "digit", "special"];
+  return keys.some(
+    (k) => config[k].all || config[k].selected.length > 0,
+  );
 }
 
 /** Effective charset for the mask, or "all" when every group is fully allowed

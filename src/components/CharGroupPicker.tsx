@@ -1,6 +1,7 @@
 import type { CharGroup } from "../lib/charsets";
 import { isCharSelected, toggleChar } from "../lib/charsets";
 import { useT } from "../lib/i18n";
+import { Checkbox } from "./FormControls";
 
 interface Props {
   label: string;
@@ -22,21 +23,17 @@ export function CharGroupPicker({ label, chars, state, onChange, display }: Prop
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium">{label}</span>
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-text-muted">
-          <input
-            type="checkbox"
-            checked={allChecked}
-            onChange={() =>
-              onChange(
-                allChecked
-                  ? { all: false, selected: [] }
-                  : { all: true, selected: [] },
-              )
-            }
-            className="accent-primary"
-          />
-          {t("charGroup.selectAll")}
-        </label>
+        <Checkbox
+          checked={allChecked}
+          onChange={() =>
+            onChange(
+              allChecked
+                ? { all: false, selected: [] }
+                : { all: true, selected: [] },
+            )
+          }
+          label={t("charGroup.selectAll")}
+        />
       </div>
       {isNone && (
         <p className="text-xs text-text-muted">{t("charGroup.excludedNote")}</p>

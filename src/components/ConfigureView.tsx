@@ -5,10 +5,12 @@ import {
   buildCharset,
   GROUP_CHARS,
   GroupKey,
+  hasCharsetSelection,
   maskLengths,
 } from "../lib/charsets";
 import { useT } from "../lib/i18n";
 import { CharGroupPicker } from "./CharGroupPicker";
+import { Radio, Checkbox } from "./FormControls";
 
 const TABS = [
   { id: "length", key: "configure.tab.length" },
@@ -87,15 +89,11 @@ function LengthTab() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
-        <label className="flex items-center gap-2 text-sm">
-          <input
-            type="radio"
-            className="accent-primary"
-            checked={maskConfig.lengthMode === "fixed"}
-            onChange={() => setMaskConfig({ lengthMode: "fixed" })}
-          />
-          {t("configure.length.exact")}
-        </label>
+        <Radio
+          checked={maskConfig.lengthMode === "fixed"}
+          onChange={() => setMaskConfig({ lengthMode: "fixed" })}
+          label={t("configure.length.exact")}
+        />
         {maskConfig.lengthMode === "fixed" && (
           <div className="flex items-center gap-2 pl-6">
             <span className="text-sm text-text-muted">
@@ -117,15 +115,11 @@ function LengthTab() {
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="radio"
-          className="accent-primary"
-          checked={maskConfig.lengthMode === "range"}
-          onChange={() => setMaskConfig({ lengthMode: "range" })}
-        />
-        {t("configure.length.between")}
-      </label>
+      <Radio
+        checked={maskConfig.lengthMode === "range"}
+        onChange={() => setMaskConfig({ lengthMode: "range" })}
+        label={t("configure.length.between")}
+      />
       {maskConfig.lengthMode === "range" && (
         <div className="flex items-center gap-2 pl-6">
           <span className="text-sm text-text-muted">
@@ -161,15 +155,11 @@ function LengthTab() {
         </div>
       )}
 
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="radio"
-          className="accent-primary"
-          checked={maskConfig.lengthMode === "unknown"}
-          onChange={() => setMaskConfig({ lengthMode: "unknown" })}
-        />
-        {t("configure.length.unknown")}
-      </label>
+      <Radio
+        checked={maskConfig.lengthMode === "unknown"}
+        onChange={() => setMaskConfig({ lengthMode: "unknown" })}
+        label={t("configure.length.unknown")}
+      />
     </div>
   );
 }
@@ -355,11 +345,10 @@ function PartialConfig() {
                       : "border-border bg-card hover:border-primary/60"
                   }`}
                 >
-                  <input
-                    type="radio"
-                    className="mt-0.5 accent-primary"
+                  <Radio
                     checked={selected}
                     onChange={() => setRuleLevel(level.id)}
+                    className="mt-0.5"
                   />
                   <span>
                     <span className="font-semibold">{t(level.labelKey)}</span>
@@ -465,9 +454,7 @@ function CommonConfig() {
   return (
     <div className="flex flex-col gap-2.5">
       <label className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
-        <input
-          type="radio"
-          className="mt-0.5 accent-primary"
+        <Radio
           checked={dictionaryChoice !== "custom"}
           onChange={() => setDictionaryChoice("default")}
         />
@@ -480,9 +467,7 @@ function CommonConfig() {
       </label>
 
       <label className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
-        <input
-          type="radio"
-          className="mt-0.5 accent-primary"
+        <Radio
           checked={dictionaryChoice === "custom"}
           onChange={() => setDictionaryChoice("custom")}
         />
@@ -510,11 +495,9 @@ function CommonConfig() {
       )}
 
       <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
-        <input
-          type="checkbox"
-          className="mt-0.5 accent-primary"
+        <Checkbox
           checked={useRules}
-          onChange={(e) => setUseRules(e.target.checked)}
+          onChange={(checked) => setUseRules(checked)}
         />
         <span>
           <span className="font-semibold">
@@ -552,6 +535,7 @@ function NoIdeaConfig() {
 export function ConfigureView() {
   const knowledge = useRecovery((s) => s.knowledge);
   const subKnowledge = useRecovery((s) => s.subKnowledge);
+  const maskConfig = useRecovery((s) => s.maskConfig);
   const history = useRecovery((s) => s.history);
   const partA = useRecovery((s) => s.partA);
   const partB = useRecovery((s) => s.partB);
@@ -563,7 +547,7 @@ export function ConfigureView() {
 
   const canStart =
     knowledge !== "partial" ||
-    subKnowledge === "11" ||
+    (subKnowledge === "11" && hasCharsetSelection(maskConfig)) ||
     (subKnowledge === "12" && history.trim().length > 0) ||
     (subKnowledge === "13" &&
       partA.trim().length > 0 &&
