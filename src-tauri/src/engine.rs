@@ -256,7 +256,7 @@ pub fn recover_with_sink(
                         if cancelled() {
                             return RecoverResult::cancelled();
                         }
-                        return not_found(&commands);
+                        // Fall through to let John try.
                     }
                     // NoHashesLoaded / Error: fall through and let John try.
                     _ => {}
