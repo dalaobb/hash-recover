@@ -44,8 +44,10 @@ pub fn set_resource_dir(dir: PathBuf) {
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryProgress {
     /// Candidates tested so far (Hashcat's `Progress` line).
+    /// For incremental mode this is the cumulative sum across all completed
+    /// lengths plus the current length's tried count.
     pub tried: Option<u64>,
-    /// Total candidates in the attack (Hashcat's `Progress` line).
+    /// Total candidates in the current attack segment.
     pub total: Option<u64>,
     /// Completion as 0..100 (Hashcat `Progress`, John percentage).
     pub percent: Option<f64>,
@@ -55,6 +57,13 @@ pub struct RecoveryProgress {
     pub candidate: Option<String>,
     /// Estimated time remaining, as printed by the engine.
     pub eta: Option<String>,
+
+    /// Internal: cumulative tried count from completed increment lengths.
+    #[serde(skip)]
+    pub(crate) cumulative_tried: u64,
+    /// Internal: last tried value seen, to detect increment-length resets.
+    #[serde(skip)]
+    pub(crate) prev_tried: Option<u64>,
 }
 
 /// A shareable sink for progress events. The UI passes one in; the engine
@@ -677,12 +686,27 @@ fn parse_hashcat_progress(line: &str, last: &mut RecoveryProgress) -> bool {
 }
 
 /// Parse `tried/total (percent%)` into the progress snapshot.
+///
+/// For incremental mode, Hashcat resets `tried` and `total` when moving to the
+/// next length.  We detect the reset (tried decreases) and accumulate a
+/// running sum so the UI shows a single growing counter.
 fn parse_hashcat_frac(value: &str, last: &mut RecoveryProgress) {
-    if let Some((tried, rest)) = value.split_once('/') {
-        if let Ok(t) = tried.trim().parse() {
-            last.tried = Some(t);
+    if let Some((tried_str, rest)) = value.split_once('/') {
+        if let Ok(t) = tried_str.trim().parse::<u64>() {
+            // Detect increment-length reset: tried dropped below the previous
+            // value.  When that happens the prior segment is complete, so add
+            // its total to the cumulative counter.
+            if let Some(prev) = last.prev_tried {
+                if t < prev {
+                    if let Some(total) = last.total {
+                        last.cumulative_tried += total;
+                    }
+                }
+            }
+            last.prev_tried = Some(t);
+            last.tried = Some(last.cumulative_tried + t);
         }
-        if let Ok(t) = rest.split_whitespace().next().unwrap_or("").parse() {
+        if let Ok(t) = rest.split_whitespace().next().unwrap_or("").parse::<u64>() {
             last.total = Some(t);
         }
     }
@@ -730,10 +754,31 @@ fn normalize_speed(raw: &str) -> String {
 /// Progress: `0g 0:00:00:03 26.19% (ETA: 21:50:09) 0g/s 1134Kp/s ...`
 /// Done:     `1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s ...`
 ///
-/// Parsed fields: percent (token 2), speed (`NUMBERp/s` token), ETA (`ETA: HH:MM:SS`).
+/// Parsed fields: tried (`Xg` token), percent (token 2), speed (`NUMBERp/s`
+/// token), ETA (`ETA: HH:MM:SS`).  Like Hashcat's incremental mode, John
+/// resets its guess counter when moving to the next mask group; we accumulate
+/// across groups so the UI shows a single growing number.
 fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
     let mut updated = false;
     let tokens: Vec<&str> = line.split_whitespace().collect();
+    // Token 0: "0g" or "1234g" — guesses tried in the current segment.
+    if let Some(g_token) = tokens.first() {
+        if let Some(g_str) = g_token.strip_suffix('g') {
+            if let Ok(g) = g_str.parse::<u64>() {
+                // Detect segment reset: guess count dropped.
+                if let Some(prev) = last.prev_tried {
+                    if g < prev {
+                        if let Some(total) = last.total {
+                            last.cumulative_tried += total;
+                        }
+                    }
+                }
+                last.prev_tried = Some(g);
+                last.tried = Some(last.cumulative_tried + g);
+                updated = true;
+            }
+        }
+    }
     if let Some(pct) = tokens.get(2).and_then(|t| t.strip_suffix('%')) {
         if let Ok(p) = pct.parse::<f64>() {
             last.percent = Some(p);
@@ -1835,6 +1880,53 @@ mod tests {
             &mut p
         ));
         assert_eq!(p.eta.as_deref(), Some("1 hour, 5 mins"));
+    }
+
+    #[test]
+    fn hashcat_increment_accumulates_tried() {
+        let mut p = RecoveryProgress::default();
+        // Length 1: 50 out of 95 tried.
+        assert!(parse_hashcat_progress(
+            "Progress.........: 50/95 (52.63%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(50));
+        assert_eq!(p.total, Some(95));
+        // Length 1 completes: 95/95.
+        assert!(parse_hashcat_progress(
+            "Progress.........: 95/95 (100.00%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(95));
+        assert_eq!(p.total, Some(95));
+        // Length 2 starts: tried resets to 0, total changes to 9025.
+        assert!(parse_hashcat_progress(
+            "Progress.........: 0/9025 (0.00%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(95)); // cumulative from length 1
+        assert_eq!(p.total, Some(9025));
+        // 200 tried in length 2.
+        assert!(parse_hashcat_progress(
+            "Progress.........: 200/9025 (2.22%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(295)); // 95 + 200
+        assert_eq!(p.total, Some(9025));
+        // Length 2 completes: 9025/9025.
+        assert!(parse_hashcat_progress(
+            "Progress.........: 9025/9025 (100.00%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(9120)); // 95 + 9025
+        assert_eq!(p.total, Some(9025));
+        // Length 3 starts.
+        assert!(parse_hashcat_progress(
+            "Progress.........: 0/857375 (0.00%)",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(9120)); // cumulative from lengths 1+2
+        assert_eq!(p.total, Some(857375));
     }
 
     #[test]
