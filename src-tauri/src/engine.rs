@@ -409,7 +409,7 @@ fn prepare_attack_files(
                 .and_then(|text| workspace.write("part_b.txt", &normalize_wordlist(text)));
             rules = None;
         }
-        StrategyKind::Bruteforce => {
+        StrategyKind::Bruteforce | StrategyKind::Incremental => {
             wordlist = None;
             rules = None;
         }

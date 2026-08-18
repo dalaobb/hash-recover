@@ -228,6 +228,13 @@ pub fn build_attack(
                 john_args: Vec::new(),
             })
         }
+        // Engine's built-in incremental mode: no mask, no wordlist.
+        // Hashcat: `hashcat -m <mode> -a 3 <hash>` (incremental without mask).
+        // John:    `john <hash>` (default incremental).
+        StrategyKind::Incremental => Ok(Attack {
+            hashcat_args: vec!["-a".into(), "3".into()],
+            john_args: Vec::new(),
+        }),
     }
 }
 

@@ -507,20 +507,52 @@ function CommonConfig() {
 }
 
 function NoIdeaConfig() {
+  const noneStrategy = useRecovery((s) => s.noneStrategy);
+  const setNoneStrategy = useRecovery((s) => s.setNoneStrategy);
   const t = useT();
 
+  const strategies = [
+    { id: "random" as const, labelKey: "configure.noIdea.random" as const, descKey: "configure.noIdea.randomDesc" as const },
+    { id: "digits" as const, labelKey: "configure.noIdea.digits" as const, descKey: "configure.noIdea.digitsDesc" as const },
+    { id: "letters" as const, labelKey: "configure.noIdea.letters" as const, descKey: "configure.noIdea.lettersDesc" as const },
+  ];
+
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <p className="text-sm leading-relaxed text-text-muted">
         {t("configure.noIdea.note")}
       </p>
-      <div className="rounded-md border border-border bg-card p-4 text-sm">
-        <span className="text-text-muted">{t("configure.noIdea.length")}</span>{" "}
-        {t("configure.noIdea.oneTo16")}
-        <span className="ml-4 text-text-muted">
-          {t("configure.noIdea.characters")}
-        </span>{" "}
-        {t("configure.noIdea.allPrintable")}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-sm text-text-muted">
+          {t("configure.noIdea.strategy")}
+        </span>
+        <div className="flex flex-col gap-1.5">
+          {strategies.map((s) => {
+            const selected = noneStrategy === s.id;
+            return (
+              <label
+                key={s.id}
+                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors ${
+                  selected
+                    ? "border-primary bg-card"
+                    : "border-border bg-card hover:border-primary/60"
+                }`}
+              >
+                <Radio
+                  checked={selected}
+                  onChange={() => setNoneStrategy(s.id)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-semibold">{t(s.labelKey)}</span>
+                  <span className="block text-xs text-text-muted">
+                    {t(s.descKey)}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

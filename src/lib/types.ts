@@ -21,7 +21,7 @@ export interface ExtractResult {
   warning: string | null;
 }
 
-export type StrategyKind = "dictionary" | "partial" | "pattern" | "bruteforce" | "combinator";
+export type StrategyKind = "dictionary" | "partial" | "pattern" | "bruteforce" | "combinator" | "incremental";
 
 export interface StrategyOptions {
   minLength?: number;

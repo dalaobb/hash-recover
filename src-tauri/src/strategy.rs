@@ -15,6 +15,8 @@ pub enum StrategyKind {
     Bruteforce,
     /// Two text lists combined into every pairing (`hashcat -a 1`).
     Combinator,
+    /// Engine's built-in incremental/random mode (no mask, no wordlist).
+    Incremental,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

@@ -41,6 +41,8 @@ export type Phase =
 export type Knowledge = "partial" | "common" | "none";
 /** Sub-choices under "I remember part of the password". */
 export type SubKnowledge = "11" | "12" | "13";
+/** Sub-choices under "I have no clue". */
+export type NoneStrategy = "random" | "digits" | "letters";
 export type DictionaryChoice = "default" | "custom";
 /** Variation level applied to wordlist attacks (rule sets per engine). */
 export type RuleLevel = "simple" | "deep" | "extreme";
@@ -88,6 +90,7 @@ interface RecoveryState {
 
   knowledge: Knowledge | null;
   subKnowledge: SubKnowledge | null;
+  noneStrategy: NoneStrategy;
   dictionaryChoice: DictionaryChoice | null;
   customDictionaryPath: string | null;
   /** Variation level for the history-based pattern attack (default simple). */
@@ -111,6 +114,7 @@ interface RecoveryState {
   analyze: () => Promise<void>;
   setKnowledge: (knowledge: Knowledge) => void;
   setSubKnowledge: (sub: SubKnowledge) => void;
+  setNoneStrategy: (strategy: NoneStrategy) => void;
   setDictionaryChoice: (choice: DictionaryChoice) => void;
   setCustomDictionaryPath: (path: string | null) => void;
   setRuleLevel: (level: RuleLevel) => void;
@@ -136,6 +140,7 @@ interface RecoveryState {
 const initialWizard = () => ({
   knowledge: null as Knowledge | null,
   subKnowledge: null as SubKnowledge | null,
+  noneStrategy: "random" as NoneStrategy,
   dictionaryChoice: null as DictionaryChoice | null,
   customDictionaryPath: null as string | null,
   ruleLevel: "simple" as RuleLevel,
@@ -227,6 +232,8 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
 
   setSubKnowledge: (sub) => set({ subKnowledge: sub }),
 
+  setNoneStrategy: (strategy) => set({ noneStrategy: strategy }),
+
   setDictionaryChoice: (choice) => set({ dictionaryChoice: choice }),
 
   setCustomDictionaryPath: (path) => set({ customDictionaryPath: path }),
@@ -316,6 +323,7 @@ function buildStrategy(state: RecoveryState): RecoveryStrategy {
   const {
     knowledge,
     subKnowledge,
+    noneStrategy,
     dictionaryChoice,
     customDictionaryPath,
     maskConfig,
@@ -364,10 +372,24 @@ function buildStrategy(state: RecoveryState): RecoveryStrategy {
       };
     }
     case "none":
-      return {
-        kind: "bruteforce",
-        options: { minLength: 1, maxLength: 16, charset: "all" },
-      };
+      switch (noneStrategy) {
+        case "digits":
+          return {
+            kind: "bruteforce",
+            options: { minLength: 1, maxLength: 16, charset: "digit" },
+          };
+        case "letters":
+          return {
+            kind: "bruteforce",
+            options: { minLength: 1, maxLength: 16, charset: "alpha" },
+          };
+        case "random":
+        default:
+          return {
+            kind: "incremental",
+            options: {},
+          };
+      }
     default:
       break;
   }
