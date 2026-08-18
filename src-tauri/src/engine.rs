@@ -650,7 +650,7 @@ fn parse_hashcat_progress(line: &str, last: &mut RecoveryProgress) -> bool {
         }
         "Speed.#*" | "Speed.#1" => {
             if !value.is_empty() {
-                last.speed = Some(value.to_string());
+                last.speed = Some(normalize_speed(value));
             }
             true
         }
@@ -697,12 +697,40 @@ fn parse_hashcat_frac(value: &str, last: &mut RecoveryProgress) {
     }
 }
 
+/// Normalize a speed string to a unified `"/s"` suffix.
+///
+/// Converts engine-specific units to a consistent format:
+/// - Hashcat: `"1.2 MH/s"` → `"1.2M/s"`, `"512 KH/s"` → `"512K/s"`
+/// - John: `"1134Kp/s"` → `"1134K/s"`, `"2.178g/s"` → `"2.178/s"`
+fn normalize_speed(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // Strip trailing "/s" first, then any engine-specific suffix before it.
+    if let Some(rest) = trimmed.strip_suffix("/s") {
+        // rest is like "1.2 MH", "1134Kp", "2.178g"
+        // Find the last digit/dot/comma to locate the number boundary.
+        if let Some(idx) = rest.rfind(|c: char| c.is_ascii_digit() || c == '.' || c == ',') {
+            let number_part = &rest[..=idx];
+            let suffix = rest[idx + 1..].trim(); // e.g. "MH", "Kp", "g"
+            // Keep only the SI prefix (K, M, G, T, etc.) if present.
+            let si_prefix = suffix
+                .chars()
+                .next()
+                .filter(|c| matches!(c, 'K' | 'M' | 'G' | 'T' | 'P' | 'E'))
+                .map(|c| c.to_string())
+                .unwrap_or_default();
+            return format!("{number_part}{si_prefix}/s");
+        }
+    }
+    // Fallback: return as-is.
+    trimmed.to_string()
+}
+
 /// Parse one John progress line (`--progress-every`). John outputs:
 ///
 /// Progress: `0g 0:00:00:03 26.19% (ETA: 21:50:09) 0g/s 1134Kp/s ...`
 /// Done:     `1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s ...`
 ///
-/// Parsed fields: percent (token 2), speed (`NUMBERg/s` token), ETA (`ETA: HH:MM:SS`).
+/// Parsed fields: percent (token 2), speed (`NUMBERp/s` token), ETA (`ETA: HH:MM:SS`).
 fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
     let mut updated = false;
     let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -712,10 +740,11 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
             updated = true;
         }
     }
-    // Speed: token like "2.178g/s" or "0g/s" (not "1134Kp/s" which ends with "p/s").
+    // Speed: token like "1134Kp/s" or "1122Kp/s" (passwords/s — the useful metric).
+    // John also prints "0g/s" (guesses/s) which is usually 0 and not useful.
     for token in &tokens {
-        if token.ends_with("g/s") && token.len() > 3 {
-            last.speed = Some((*token).to_string());
+        if token.ends_with("p/s") && token.len() > 3 {
+            last.speed = Some(normalize_speed(token));
             updated = true;
             break;
         }
@@ -1745,6 +1774,22 @@ mod tests {
     }
 
     #[test]
+    fn normalize_speed_strips_engine_suffixes() {
+        // Hashcat units
+        assert_eq!(normalize_speed("1.2 MH/s"), "1.2M/s");
+        assert_eq!(normalize_speed("512 KH/s"), "512K/s");
+        assert_eq!(normalize_speed("3.5 GH/s"), "3.5G/s");
+        assert_eq!(normalize_speed("100 H/s"), "100/s");
+        // John units
+        assert_eq!(normalize_speed("1134Kp/s"), "1134K/s");
+        assert_eq!(normalize_speed("2.178g/s"), "2.178/s");
+        assert_eq!(normalize_speed("0p/s"), "0/s");
+        // Edge cases
+        assert_eq!(normalize_speed(" 1.0 MH/s "), "1.0M/s");
+        assert_eq!(normalize_speed("42/s"), "42/s");
+    }
+
+    #[test]
     fn resolves_program_in_named_subfolder() {
         let dir = std::env::temp_dir().join(format!("hashrecover-bin-{}", std::process::id()));
         let sub = dir.join("hashcat");
@@ -1779,7 +1824,7 @@ mod tests {
             "Speed.#*.........: 1.2 MH/s",
             &mut p
         ));
-        assert_eq!(p.speed.as_deref(), Some("1.2 MH/s"));
+        assert_eq!(p.speed.as_deref(), Some("1.2M/s"));
         assert!(parse_hashcat_progress(
             "Candidates.#1....: pw123 -> pw456",
             &mut p
@@ -1816,7 +1861,7 @@ mod tests {
             &mut p
         ));
         assert_eq!(p.percent, Some(26.19));
-        assert_eq!(p.speed.as_deref(), Some("0g/s"));
+        assert_eq!(p.speed.as_deref(), Some("1134K/s"));
         assert_eq!(p.eta.as_deref(), Some("21:50:09"));
     }
 
@@ -1827,7 +1872,7 @@ mod tests {
             "1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s 1122Kc/s 1122KC/s 0234065415..0234991515",
             &mut p
         ));
-        assert_eq!(p.speed.as_deref(), Some("2.178g/s"));
+        assert_eq!(p.speed.as_deref(), Some("1122K/s"));
     }
 
     #[test]
