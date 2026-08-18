@@ -138,7 +138,7 @@ pub fn describe_hash(input: &str) -> Option<HashDescription> {
         "pdf" => match mode {
             Some(10400) => ("RC4-40", "Easy"),
             Some(10500) => ("RC4-128", "Easy"),
-            None => ("AES-128", "Medium"),
+            Some(25400) => ("AES-128", "Medium"),
             Some(10600) | Some(10700) => ("AES-256", "Hard"),
             _ => return None,
         },
@@ -174,12 +174,12 @@ pub fn describe_hash(input: &str) -> Option<HashDescription> {
 /// | --- | --- | ------------ | ------- | ---- |
 /// | 1   | 2   | RC4-40       | 10400   | pdf  |
 /// | 2   | 3   | RC4-128      | 10500   | pdf  |
-/// | 4   | 4   | AES-128      | -       | pdf  |
+/// | 4   | 4   | AES-128      | 25400   | pdf  |
 /// | 5   | 5   | AES-256 (L3) | 10600   | pdf  |
 /// | 5   | 6   | AES-256 (L8) | 10700   | pdf  |
 ///
-/// AES-128 (V=4) has no Hashcat mode and is handed to John. Any pair outside
-/// this table is malformed and rejected.
+/// Mode 25400 (PDF 1.4-1.6 owner password) handles AES-128 hashes that
+/// older modes cannot crack. John is always the fallback engine.
 fn normalize_pdf(fields: &[&str]) -> Result<(Option<u32>, Option<&'static str>), NormalizeError> {
     if fields.len() < 2 {
         return Err(NormalizeError);
@@ -189,12 +189,9 @@ fn normalize_pdf(fields: &[&str]) -> Result<(Option<u32>, Option<&'static str>),
     let mode = match (v, r) {
         (1, 2) => 10400,
         (2, 3) => 10500,
+        (4, 4) => 25400,
         (5, 5) => 10600,
         (5, 6) => 10700,
-        (4, 4) => {
-            // AES-128: no Hashcat mode, John only.
-            return Ok((None, Some(JOHN_FORMAT_PDF)));
-        }
         _ => return Err(NormalizeError),
     };
     Ok((Some(mode), Some(JOHN_FORMAT_PDF)))
@@ -285,6 +282,10 @@ mod tests {
             Some(10500)
         );
         assert_eq!(
+            normalize_hash("$pdf$4*4*128*...").unwrap().hashcat_mode,
+            Some(25400)
+        );
+        assert_eq!(
             normalize_hash("$pdf$5*5*256*...").unwrap().hashcat_mode,
             Some(10600)
         );
@@ -295,10 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn pdf_aes128_is_john_only() {
+    fn pdf_aes128_uses_hashcat_mode_25400() {
         let n = normalize_hash("$pdf$4*4*128*...").unwrap();
-        assert_eq!(n.engine, Engine::John);
-        assert_eq!(n.hashcat_mode, None);
+        assert_eq!(n.engine, Engine::Hashcat);
+        assert_eq!(n.hashcat_mode, Some(25400));
         assert_eq!(n.john_format, Some("pdf"));
     }
 
