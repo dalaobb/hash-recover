@@ -10,7 +10,7 @@ import {
 } from "../lib/charsets";
 import { useT } from "../lib/i18n";
 import { CharGroupPicker } from "./CharGroupPicker";
-import { Radio, Checkbox } from "./FormControls";
+import { Radio, Switch } from "./FormControls";
 
 const TABS = [
   { id: "length", key: "configure.tab.length" },
@@ -494,20 +494,14 @@ function CommonConfig() {
         </div>
       )}
 
-      <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card p-4 text-sm">
-        <Checkbox
+      <div className="rounded-lg border border-border bg-bg p-4">
+        <Switch
           checked={useRules}
           onChange={(checked) => setUseRules(checked)}
+          label={t("configure.rules.dictionaryToggle")}
+          description={t("configure.rules.dictionaryToggleDesc")}
         />
-        <span>
-          <span className="font-semibold">
-            {t("configure.rules.dictionaryToggle")}
-          </span>
-          <span className="block text-xs text-text-muted">
-            {t("configure.rules.dictionaryToggleDesc")}
-          </span>
-        </span>
-      </label>
+      </div>
     </div>
   );
 }

@@ -79,3 +79,41 @@ export function Checkbox({ checked, onChange, label, className }: CheckboxProps)
     </label>
   );
 }
+
+interface SwitchProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label?: ReactNode;
+  description?: ReactNode;
+  className?: string;
+}
+
+export function Switch({ checked, onChange, label, description, className }: SwitchProps) {
+  return (
+    <label className={`flex cursor-pointer items-center gap-3 ${className ?? ""}`}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? "bg-primary" : "bg-text-muted/30"
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-bg shadow-sm transition-transform ${
+            checked ? "translate-x-4" : ""
+          }`}
+        />
+      </button>
+      {(label || description) && (
+        <span className="flex flex-col gap-0.5">
+          {label && <span className="text-sm font-semibold">{label}</span>}
+          {description && (
+            <span className="text-xs text-text-muted">{description}</span>
+          )}
+        </span>
+      )}
+    </label>
+  );
+}
