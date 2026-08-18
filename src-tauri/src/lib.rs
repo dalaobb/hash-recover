@@ -233,6 +233,7 @@ mod tests {
                 kind: StrategyKind::Dictionary,
                 options: StrategyOptions::default(),
             },
+            gpu_acceleration: None,
         };
         let result = engine::recover(request);
         assert!(!result.ok);

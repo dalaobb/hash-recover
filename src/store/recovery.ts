@@ -256,12 +256,14 @@ export const useRecovery = create<RecoveryState>((set, get) => ({
   startRecovery: async () => {
     const { filePath, hash } = get();
     if (!filePath || !hash) return;
+    const gpuAcceleration = useSettings.getState().gpuAcceleration;
     set({ phase: "running", result: null, progress: null, paused: false });
     const [result, gpu] = await Promise.all([
       runRecovery({
         filePath,
         hash,
         strategy: buildStrategy(get()),
+        gpuAcceleration,
       }),
       getGpuInfo().catch(() => null),
     ]);

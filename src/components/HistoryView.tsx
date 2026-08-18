@@ -7,10 +7,10 @@ import type { HistoryEntry } from "../lib/types";
 
 function engineLabel(entry: HistoryEntry, t: ReturnType<typeof useT>): string {
   switch (entry.engine) {
-    case "hashcat":
-      return t("history.engineHashcat");
-    case "john":
-      return t("history.engineJohn");
+    case "GPU":
+      return t("history.engineGPU");
+    case "CPU":
+      return t("history.engineCPU");
     case "history":
       return t("history.engineHistory");
     default:

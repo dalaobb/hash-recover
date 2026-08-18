@@ -23,9 +23,11 @@ interface SettingsState {
   theme: Theme;
   fontSize: FontSize;
   language: Language;
+  gpuAcceleration: boolean;
   setTheme: (theme: Theme) => void;
   setFontSize: (size: FontSize) => void;
   setLanguage: (language: Language) => void;
+  setGpuAcceleration: (enabled: boolean) => void;
 }
 
 export const useSettings = create<SettingsState>()(
@@ -34,9 +36,11 @@ export const useSettings = create<SettingsState>()(
       theme: "dark",
       fontSize: "normal",
       language: "en",
+      gpuAcceleration: true,
       setTheme: (theme) => set({ theme }),
       setFontSize: (fontSize) => set({ fontSize }),
       setLanguage: (language) => set({ language }),
+      setGpuAcceleration: (gpuAcceleration) => set({ gpuAcceleration }),
     }),
     { name: "hashrecover-settings" },
   ),

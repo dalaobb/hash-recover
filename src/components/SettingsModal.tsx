@@ -1,9 +1,4 @@
-import {
-  FONT_SIZE_PX,
-  FontSize,
-  Theme,
-  useSettings,
-} from "../store/settings";
+import { FONT_SIZE_PX, FontSize, Theme, useSettings } from "../store/settings";
 import { Language, useT } from "../lib/i18n";
 
 const FONT_SIZES: FontSize[] = ["small", "normal", "large", "larger"];
@@ -20,6 +15,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setFontSize = useSettings((s) => s.setFontSize);
   const language = useSettings((s) => s.language);
   const setLanguage = useSettings((s) => s.setLanguage);
+  const gpuAcceleration = useSettings((s) => s.gpuAcceleration);
+  const setGpuAcceleration = useSettings((s) => s.setGpuAcceleration);
 
   const themeButton = (value: Theme, label: string) => (
     <button
@@ -107,7 +104,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex flex-col gap-2">
-          <span className="text-sm font-medium">{t("settings.appearance")}</span>
+          <span className="text-sm font-medium">
+            {t("settings.appearance")}
+          </span>
           <div className="flex gap-2">
             {themeButton("dark", t("settings.dark"))}
             {themeButton("light", t("settings.light"))}
@@ -117,7 +116,32 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium">{t("settings.fontSize")}</span>
           <div className="flex gap-2">{FONT_SIZES.map(fontSizeButton)}</div>
-          <p className="text-xs text-text-muted">{t("settings.preview")}</p>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">
+              {t("settings.gpuAcceleration")}
+            </span>
+            <span className="text-xs text-text-muted">
+              {t("settings.gpuAccelerationHint")}
+            </span>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={gpuAcceleration}
+            onClick={() => setGpuAcceleration(!gpuAcceleration)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+              gpuAcceleration ? "bg-primary" : "bg-border"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                gpuAcceleration ? "translate-x-5" : "translate-x-0"
+              }`}
+            />
+          </button>
         </div>
       </div>
     </div>

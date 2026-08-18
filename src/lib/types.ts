@@ -52,6 +52,7 @@ export interface RecoverRequest {
   filePath: string;
   hash: string;
   strategy: RecoveryStrategy;
+  gpuAcceleration?: boolean;
 }
 
 export interface RecoverResult {
@@ -80,7 +81,7 @@ export interface HistoryEntry {
   difficulty: string | null;
   /** The recovered password. */
   password: string;
-  /** Which engine found it: "hashcat", "john" or "history" (reuse). */
+  /** Which engine found it: "GPU", "CPU" or "history" (reuse). */
   engine: string;
   /** Strategy kind that recovered it ("dictionary", "pattern", ...). */
   strategyKind: string;
@@ -89,7 +90,7 @@ export interface HistoryEntry {
 }
 
 /** Live progress pushed from the engine via `recovery://progress`. Every field
- *  is optional: Hashcat reports all of them, John only percent/speed. */
+ *  is optional: GPU reports all of them, CPU only percent/speed. */
 export interface RecoveryProgress {
   /** Candidates tested so far (current segment). */
   tried: number | null;

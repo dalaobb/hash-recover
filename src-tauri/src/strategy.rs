@@ -58,6 +58,7 @@ pub struct RecoverRequest {
     pub file_path: String,
     pub hash: String,
     pub strategy: RecoveryStrategy,
+    pub gpu_acceleration: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

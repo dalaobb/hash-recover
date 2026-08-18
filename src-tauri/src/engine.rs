@@ -254,8 +254,10 @@ pub fn recover_with_sink(
         _ => false,
     };
 
-    // Hashcat first when this hash has a supported mode.
-    if let Some(mode) = normalized.hashcat_mode {
+    // Hashcat first when this hash has a supported mode and GPU acceleration
+    // is enabled.  When gpu_acceleration is false the user prefers John-only.
+    let gpu_enabled = request.gpu_acceleration.unwrap_or(true);
+    if let Some(mode) = normalized.hashcat_mode.filter(|_| gpu_enabled) {
         if hash_too_long_for_hashcat {
             crate::logging::event(
                 "engine",
@@ -275,7 +277,7 @@ pub fn recover_with_sink(
                     &mut commands,
                 ) {
                     HashcatOutcome::Cracked(password) => {
-                        record_history(history_dir, &request, &normalized, "hashcat", &password);
+                        record_history(history_dir, &request, &normalized, "GPU", &password);
                         return ok_result(password, &commands);
                     }
                     HashcatOutcome::NotFound => {
@@ -292,15 +294,16 @@ pub fn recover_with_sink(
         if cancelled() {
             return RecoverResult::cancelled();
         }
-        // The combinator attack has no John fallback; if Hashcat did not
-        // succeed it is simply unavailable.
-        if matches!(request.strategy.kind, StrategyKind::Combinator) {
-            crate::logging::event("engine", "recover", "combinator_no_hashcat", None);
-            return RecoverResult::error(
-                "This recovery method is not available in your current version.",
-                "method_unavailable",
-            );
-        }
+    }
+
+    // The combinator attack is Hashcat-only; if Hashcat was skipped or failed
+    // it is simply unavailable.
+    if matches!(request.strategy.kind, StrategyKind::Combinator) {
+        crate::logging::event("engine", "recover", "combinator_no_hashcat", None);
+        return RecoverResult::error(
+            "This recovery method is not available in your current version.",
+            "method_unavailable",
+        );
     }
 
     // John fallback, and the only engine for Hashcat-less hashes.
@@ -340,7 +343,7 @@ pub fn recover_with_sink(
                 &mut commands,
             ) {
                 JohnOutcome::Cracked(password) => {
-                    record_history(history_dir, &request, &normalized, "john", &password);
+                    record_history(history_dir, &request, &normalized, "CPU", &password);
                     return ok_result(password, &commands);
                 }
                 JohnOutcome::NotFound => {
@@ -1646,6 +1649,7 @@ mod tests {
                 kind: StrategyKind::Dictionary,
                 options: StrategyOptions::default(),
             },
+            gpu_acceleration: None,
         };
         let result = recover(request);
         assert!(!result.ok);
@@ -1670,6 +1674,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            gpu_acceleration: None,
         };
         let result = recover(request);
         assert!(!result.ok);
@@ -1729,6 +1734,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            gpu_acceleration: None,
         };
         let ws = TempWorkspace::new().unwrap();
         let files = prepare_attack_files(&request, &ws).unwrap();
@@ -1767,6 +1773,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            gpu_acceleration: None,
         };
         let ws = TempWorkspace::new().unwrap();
         let files = prepare_attack_files(&request, &ws).unwrap();
@@ -1789,6 +1796,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            gpu_acceleration: None,
         };
         let ws = TempWorkspace::new().unwrap();
         let files = prepare_attack_files(&request, &ws).unwrap();
@@ -1813,6 +1821,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            gpu_acceleration: None,
         };
         let result = recover(request);
         std::fs::remove_dir_all(&dir).ok();
@@ -2081,9 +2090,10 @@ mod tests {
                 kind: StrategyKind::Dictionary,
                 options: StrategyOptions::default(),
             },
+            gpu_acceleration: None,
         };
         let normalized = normalizer::normalize_hash(&request.hash).unwrap();
-        record_history(Some(&dir), &request, &normalized, "hashcat", "password123");
+        record_history(Some(&dir), &request, &normalized, "GPU", "password123");
         assert!(history::find(&dir, &normalized.hash).is_some());
 
         // A repeat attempt answers from history without running any engine.
@@ -2115,6 +2125,7 @@ mod tests {
                     ..Default::default()
                 },
             },
+            gpu_acceleration: None,
         };
         let result = recover_with_sink(request, Arc::new(|_| {}), Some(&dir));
         std::fs::remove_dir_all(&wl_dir).ok();

@@ -243,8 +243,8 @@ const en = {
     loading: "Loading…",
     emptyTitle: "No recovered passwords yet",
     emptyBody: "Successfully recovered passwords appear here for reuse.",
-    engineHashcat: "Hashcat",
-    engineJohn: "John the Ripper",
+    engineGPU: "GPU",
+    engineCPU: "CPU",
     engineHistory: "Recovery history",
     strategy: {
       dictionary: "Common passwords",
@@ -267,8 +267,10 @@ const en = {
       large: "Large",
       larger: "Larger",
     },
-    preview: "Preview: this is how text will look.",
     language: "Language",
+    gpuAcceleration: "GPU acceleration",
+    gpuAccelerationHint:
+      "When enabled, use GPU acceleration with fallback to CPU. When disabled, use CPU only.",
   },
   charGroup: {
     selectAll: "Select all",
@@ -513,8 +515,8 @@ const zh: typeof en = {
     loading: "加载中…",
     emptyTitle: "暂无已恢复的密码",
     emptyBody: "成功恢复的密码会显示在这里，以便复用。",
-    engineHashcat: "Hashcat",
-    engineJohn: "John the Ripper",
+    engineGPU: "GPU",
+    engineCPU: "CPU",
     engineHistory: "恢复历史记录",
     strategy: {
       dictionary: "常见密码",
@@ -537,8 +539,10 @@ const zh: typeof en = {
       large: "大",
       larger: "更大",
     },
-    preview: "预览：文本显示效果。",
     language: "语言",
+    gpuAcceleration: "GPU 加速",
+    gpuAccelerationHint:
+      "开启时优先使用 GPU 加速，失败后回退到 CPU。关闭时只使用 CPU。",
   },
   charGroup: {
     selectAll: "全选",
