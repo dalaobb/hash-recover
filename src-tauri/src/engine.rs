@@ -43,9 +43,7 @@ pub fn set_resource_dir(dir: PathBuf) {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryProgress {
-    /// Candidates tested so far (Hashcat's `Progress` line).
-    /// For incremental mode this is the cumulative sum across all completed
-    /// lengths plus the current length's tried count.
+    /// Candidates tested so far in the current attack segment.
     pub tried: Option<u64>,
     /// Total candidates in the current attack segment.
     pub total: Option<u64>,
@@ -58,12 +56,19 @@ pub struct RecoveryProgress {
     /// Estimated time remaining, as printed by the engine.
     pub eta: Option<String>,
 
-    /// Internal: cumulative tried count from completed increment lengths.
+    /// Internal: raw total from the current segment (not accumulated).
     #[serde(skip)]
-    pub(crate) cumulative_tried: u64,
+    pub(crate) segment_total: Option<u64>,
     /// Internal: last tried value seen, to detect increment-length resets.
     #[serde(skip)]
     pub(crate) prev_tried: Option<u64>,
+    /// Internal: sum of completed segment totals.
+    #[serde(skip)]
+    pub(crate) accum_total: u64,
+    /// Cumulative tried count across all completed segments plus current.
+    pub cumulative_tried: Option<u64>,
+    /// Cumulative total count across all completed segments plus current.
+    pub cumulative_total: Option<u64>,
 }
 
 /// A shareable sink for progress events. The UI passes one in; the engine
@@ -698,16 +703,19 @@ fn parse_hashcat_frac(value: &str, last: &mut RecoveryProgress) {
             // its total to the cumulative counter.
             if let Some(prev) = last.prev_tried {
                 if t < prev {
-                    if let Some(total) = last.total {
-                        last.cumulative_tried += total;
+                    if let Some(seg) = last.segment_total {
+                        last.accum_total += seg;
                     }
                 }
             }
             last.prev_tried = Some(t);
-            last.tried = Some(last.cumulative_tried + t);
+            last.tried = Some(t);
+            last.cumulative_tried = Some(last.accum_total + t);
         }
         if let Ok(t) = rest.split_whitespace().next().unwrap_or("").parse::<u64>() {
+            last.segment_total = Some(t);
             last.total = Some(t);
+            last.cumulative_total = Some(last.accum_total + t);
         }
     }
     if let Some(open) = value.find('(') {
@@ -735,7 +743,7 @@ fn normalize_speed(raw: &str) -> String {
         if let Some(idx) = rest.rfind(|c: char| c.is_ascii_digit() || c == '.' || c == ',') {
             let number_part = &rest[..=idx];
             let suffix = rest[idx + 1..].trim(); // e.g. "MH", "Kp", "g"
-            // Keep only the SI prefix (K, M, G, T, etc.) if present.
+                                                 // Keep only the SI prefix (K, M, G, T, etc.) if present.
             let si_prefix = suffix
                 .chars()
                 .next()
@@ -768,13 +776,14 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
                 // Detect segment reset: guess count dropped.
                 if let Some(prev) = last.prev_tried {
                     if g < prev {
-                        if let Some(total) = last.total {
-                            last.cumulative_tried += total;
+                        if let Some(seg) = last.segment_total {
+                            last.accum_total += seg;
                         }
                     }
                 }
                 last.prev_tried = Some(g);
-                last.tried = Some(last.cumulative_tried + g);
+                last.tried = Some(g);
+                last.cumulative_tried = Some(last.accum_total + g);
                 updated = true;
             }
         }
@@ -1892,6 +1901,8 @@ mod tests {
         ));
         assert_eq!(p.tried, Some(50));
         assert_eq!(p.total, Some(95));
+        assert_eq!(p.cumulative_tried, Some(50));
+        assert_eq!(p.cumulative_total, Some(95));
         // Length 1 completes: 95/95.
         assert!(parse_hashcat_progress(
             "Progress.........: 95/95 (100.00%)",
@@ -1899,34 +1910,44 @@ mod tests {
         ));
         assert_eq!(p.tried, Some(95));
         assert_eq!(p.total, Some(95));
+        assert_eq!(p.cumulative_tried, Some(95));
+        assert_eq!(p.cumulative_total, Some(95));
         // Length 2 starts: tried resets to 0, total changes to 9025.
         assert!(parse_hashcat_progress(
             "Progress.........: 0/9025 (0.00%)",
             &mut p
         ));
-        assert_eq!(p.tried, Some(95)); // cumulative from length 1
-        assert_eq!(p.total, Some(9025));
-        // 200 tried in length 2.
+        assert_eq!(p.tried, Some(0)); // raw
+        assert_eq!(p.total, Some(9025)); // raw
+        assert_eq!(p.cumulative_tried, Some(95)); // 95 from length 1 + 0
+        assert_eq!(p.cumulative_total, Some(9120)); // 95 + 9025
+                                                    // 200 tried in length 2.
         assert!(parse_hashcat_progress(
             "Progress.........: 200/9025 (2.22%)",
             &mut p
         ));
-        assert_eq!(p.tried, Some(295)); // 95 + 200
-        assert_eq!(p.total, Some(9025));
-        // Length 2 completes: 9025/9025.
+        assert_eq!(p.tried, Some(200)); // raw
+        assert_eq!(p.total, Some(9025)); // raw
+        assert_eq!(p.cumulative_tried, Some(295)); // 95 + 200
+        assert_eq!(p.cumulative_total, Some(9120)); // 95 + 9025
+                                                    // Length 2 completes: 9025/9025.
         assert!(parse_hashcat_progress(
             "Progress.........: 9025/9025 (100.00%)",
             &mut p
         ));
-        assert_eq!(p.tried, Some(9120)); // 95 + 9025
-        assert_eq!(p.total, Some(9025));
-        // Length 3 starts.
+        assert_eq!(p.tried, Some(9025)); // raw
+        assert_eq!(p.total, Some(9025)); // raw
+        assert_eq!(p.cumulative_tried, Some(9120)); // 95 + 9025
+        assert_eq!(p.cumulative_total, Some(9120)); // 95 + 9025
+                                                    // Length 3 starts.
         assert!(parse_hashcat_progress(
             "Progress.........: 0/857375 (0.00%)",
             &mut p
         ));
-        assert_eq!(p.tried, Some(9120)); // cumulative from lengths 1+2
-        assert_eq!(p.total, Some(857375));
+        assert_eq!(p.tried, Some(0)); // raw
+        assert_eq!(p.total, Some(857375)); // raw
+        assert_eq!(p.cumulative_tried, Some(9120)); // 95 + 9025 + 0
+        assert_eq!(p.cumulative_total, Some(866495)); // 95 + 9025 + 857375
     }
 
     #[test]

@@ -78,15 +78,17 @@ export function RunView() {
   const percent = progress?.percent ?? null;
   const total = progress?.total ?? null;
   const tried = progress?.tried ?? null;
+  const cumulativeTried = progress?.cumulativeTried ?? null;
+  const cumulativeTotal = progress?.cumulativeTotal ?? null;
 
   const stats: { label: string; value: string }[] = [
     { label: t("run.timeElapsed"), value: formatElapsed(elapsed) },
     {
       label: t("run.passwordsTried"),
       value:
-        total !== null && tried !== null
-          ? `${formatCount(tried)} / ${formatCount(total)}`
-          : formatCount(tried),
+        cumulativeTotal !== null && cumulativeTried !== null
+          ? `${formatCount(cumulativeTried)} / ${formatCount(cumulativeTotal)}`
+          : formatCount(cumulativeTried),
     },
     { label: t("run.speed"), value: progress?.speed ?? "—" },
     { label: t("run.currentCandidate"), value: progress?.candidate ?? "—" },

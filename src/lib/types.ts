@@ -91,9 +91,9 @@ export interface HistoryEntry {
 /** Live progress pushed from the engine via `recovery://progress`. Every field
  *  is optional: Hashcat reports all of them, John only percent/speed. */
 export interface RecoveryProgress {
-  /** Candidates tested so far. */
+  /** Candidates tested so far (current segment). */
   tried: number | null;
-  /** Total candidates in the attack. */
+  /** Total candidates in the attack (current segment). */
   total: number | null;
   /** Completion as 0..100. */
   percent: number | null;
@@ -103,6 +103,10 @@ export interface RecoveryProgress {
   candidate: string | null;
   /** Estimated time remaining as printed by the engine. */
   eta: string | null;
+  /** Cumulative candidates tested across all completed segments + current. */
+  cumulativeTried: number | null;
+  /** Cumulative total candidates across all completed segments + current. */
+  cumulativeTotal: number | null;
 }
 
 export type DeviceKind = "gpu" | "cpu" | "other";
