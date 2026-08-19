@@ -678,7 +678,7 @@ fn parse_hashcat_progress(line: &str, last: &mut RecoveryProgress) -> bool {
         }
         // Candidates.#01, Candidates.#03, … — updated every status block.
         k if k.starts_with("Candidates.") => {
-            let current = value.split(" -> ").next().unwrap_or(value).trim();
+            let current = value.trim();
             if !current.is_empty() {
                 last.candidate = Some(current.to_string());
             }
@@ -1924,7 +1924,7 @@ mod tests {
             "Candidates.#1....: pw123 -> pw456",
             &mut p
         ));
-        assert_eq!(p.candidate.as_deref(), Some("pw123"));
+        assert_eq!(p.candidate.as_deref(), Some("pw123 -> pw456"));
         assert!(parse_hashcat_progress(
             "Time.Estimated...: Sun Aug 16 18:00:00 2026 (1 hour, 5 mins)",
             &mut p
@@ -1952,13 +1952,13 @@ mod tests {
             "Candidates.#01...: 14632221 -> 66708067",
             &mut p
         ));
-        assert_eq!(p.candidate.as_deref(), Some("14632221"));
+        assert_eq!(p.candidate.as_deref(), Some("14632221 -> 66708067"));
         // Second device candidate overwrites first (both are same-second data)
         assert!(parse_hashcat_progress(
             "Candidates.#03...: 17375510 -> 61588510",
             &mut p
         ));
-        assert_eq!(p.candidate.as_deref(), Some("17375510"));
+        assert_eq!(p.candidate.as_deref(), Some("17375510 -> 61588510"));
     }
 
     #[test]
