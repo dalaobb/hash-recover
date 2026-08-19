@@ -184,9 +184,13 @@ impl Rar5State {
         let iv = hex_encode(self.iv.as_ref().unwrap());
         if let Some(ref chk) = self.psw_check {
             let chk_hex = hex_encode(chk);
-            format!("$rar5${salt}${lg2}${iv}${}${chk_hex}", SIZE_PSWCHECK,)
+            format!(
+                "$rar5${}${salt}${lg2}${iv}${}${chk_hex}",
+                SIZE_SALT50,
+                SIZE_PSWCHECK,
+            )
         } else {
-            format!("$rar5${salt}${lg2}${iv}$0$")
+            format!("$rar5${}${salt}${lg2}${iv}$0$", SIZE_SALT50)
         }
     }
 }
