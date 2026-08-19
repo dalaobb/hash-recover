@@ -135,7 +135,7 @@ export function RunView() {
           {stats.map((stat) => (
             <div key={stat.label} className="flex flex-col gap-1 rounded-md border border-border bg-bg p-3">
               <span className="text-xs text-text-muted">{stat.label}</span>
-              <span className="truncate font-mono text-sm">{stat.value}</span>
+              <span className="truncate font-mono text-sm" title={stat.value}>{stat.value}</span>
             </div>
           ))}
         </div>
