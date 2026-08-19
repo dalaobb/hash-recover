@@ -186,8 +186,7 @@ impl Rar5State {
             let chk_hex = hex_encode(chk);
             format!(
                 "$rar5${}${salt}${lg2}${iv}${}${chk_hex}",
-                SIZE_SALT50,
-                SIZE_PSWCHECK,
+                SIZE_SALT50, SIZE_PSWCHECK,
             )
         } else {
             format!("$rar5${}${salt}${lg2}${iv}$0$", SIZE_SALT50)
@@ -506,5 +505,33 @@ mod tests {
     fn hex_encode_works() {
         assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
         assert_eq!(hex_encode(&[0x00, 0x01]), "0001");
+    }
+
+    #[test]
+    fn extract_rar5_from_real_file() {
+        let test_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("testfile")
+            .join("Ali.rar");
+        if !test_path.exists() {
+            eprintln!("skipping: test file not found at {test_path:?}");
+            return;
+        }
+        let ext = RarExtractor;
+        let lines = ext.extract(&test_path).expect("extract should succeed");
+        assert_eq!(lines.len(), 1, "should return exactly one hash");
+        let h = &lines[0].hash;
+        assert!(h.starts_with("$rar5$"), "hash should be RAR5 format: {h}");
+        // $rar5$<salt_len>$<salt>$<lg2>$<iv>$<pswcheck_len>$<pswcheck>
+        let parts: Vec<&str> = h.split('$').collect();
+        assert_eq!(parts.len(), 8, "hash should have 8 $-separated parts: {h}");
+        assert_eq!(parts[2], "16", "salt_len should be 16");
+        assert_eq!(
+            parts[4].parse::<u8>().unwrap(),
+            15,
+            "lg2_count should be 15"
+        );
+        assert_eq!(parts[6], "8", "pswcheck_len should be 8");
     }
 }

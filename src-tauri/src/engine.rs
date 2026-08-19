@@ -665,16 +665,24 @@ fn parse_hashcat_progress(line: &str, last: &mut RecoveryProgress) -> bool {
             parse_hashcat_frac(value, last);
             true
         }
-        "Speed.#*" | "Speed.#1" => {
+        // Speed.#* (aggregate) takes priority; individual device lines
+        // (Speed.#01, Speed.#03, …) are accepted as fallback.
+        k if k.starts_with("Speed.") => {
             if !value.is_empty() {
-                last.speed = Some(normalize_speed(value));
+                let is_aggregate = k == "Speed.#*";
+                if is_aggregate || last.speed.is_none() {
+                    last.speed = Some(normalize_speed(value));
+                }
             }
             true
         }
-        "Candidates.#1" => {
-            let current = value.split(" -> ").next().unwrap_or(value).trim();
-            if !current.is_empty() {
-                last.candidate = Some(current.to_string());
+        // Candidates.#01, Candidates.#03, … — first device wins.
+        k if k.starts_with("Candidates.") => {
+            if last.candidate.is_none() {
+                let current = value.split(" -> ").next().unwrap_or(value).trim();
+                if !current.is_empty() {
+                    last.candidate = Some(current.to_string());
+                }
             }
             true
         }
@@ -737,27 +745,56 @@ fn parse_hashcat_frac(value: &str, last: &mut RecoveryProgress) {
 /// Converts engine-specific units to a consistent format:
 /// - Hashcat: `"1.2 MH/s"` → `"1.2M/s"`, `"512 KH/s"` → `"512K/s"`
 /// - John: `"1134Kp/s"` → `"1134K/s"`, `"2.178g/s"` → `"2.178/s"`
+///
+/// Hashcat 7.x appends timing/config after the speed, e.g.
+/// `"135.2 kH/s (86.96ms) @ Accel:12 ..."`.  We extract the first token
+/// that contains `/s` before discarding the rest.
 fn normalize_speed(raw: &str) -> String {
     let trimmed = raw.trim();
+    // Extract just the speed token (e.g. "135.2 kH/s") from a line that may
+    // contain trailing timing info like "(86.96ms) @ Accel:12 ...".
+    // The speed always ends with "/s"; take everything up to and including
+    // the last "/s" occurrence, discarding any trailing config tokens.
+    let speed_part = match trimmed.rfind("/s") {
+        Some(pos) => trimmed[..=pos + 1].trim(),
+        None => trimmed,
+    };
     // Strip trailing "/s" first, then any engine-specific suffix before it.
-    if let Some(rest) = trimmed.strip_suffix("/s") {
+    if let Some(rest) = speed_part.strip_suffix("/s") {
         // rest is like "1.2 MH", "1134Kp", "2.178g"
         // Find the last digit/dot/comma to locate the number boundary.
         if let Some(idx) = rest.rfind(|c: char| c.is_ascii_digit() || c == '.' || c == ',') {
             let number_part = &rest[..=idx];
-            let suffix = rest[idx + 1..].trim(); // e.g. "MH", "Kp", "g"
-                                                 // Keep only the SI prefix (K, M, G, T, etc.) if present.
-            let si_prefix = suffix
-                .chars()
-                .next()
-                .filter(|c| matches!(c, 'K' | 'M' | 'G' | 'T' | 'P' | 'E'))
-                .map(|c| c.to_string())
-                .unwrap_or_default();
+            let suffix = rest[idx + 1..].trim(); // e.g. "MH", "Kp", "g", "kH"
+                                                 // Determine SI prefix: John uses uppercase for SI prefixes (Kp/s,
+                                                 // Mg/s) while Hashcat 7.x uses lowercase (kH/s).  Single lowercase
+                                                 // letters (g, p) are John unit names ("guesses"/"passwords"), not SI
+                                                 // prefixes — strip them.  For two-char suffixes where the first char
+                                                 // is lowercase, uppercase it (kH → K, etc.).
+            let si_prefix = if suffix.len() == 1 {
+                // Single char: only uppercase letters are SI prefixes (e.g. "K"
+                // in John's "Kp/s"); lowercase single letters (g, p) are units.
+                suffix
+                    .chars()
+                    .next()
+                    .filter(|c| c.is_uppercase() && matches!(c, 'K' | 'M' | 'G' | 'T' | 'P' | 'E'))
+                    .map(|c| c.to_string())
+                    .unwrap_or_default()
+            } else {
+                // Two+ chars: first char is the SI prefix.
+                suffix
+                    .chars()
+                    .next()
+                    .map(|c| c.to_ascii_uppercase())
+                    .filter(|c| matches!(c, 'K' | 'M' | 'G' | 'T' | 'P' | 'E'))
+                    .map(|c| c.to_string())
+                    .unwrap_or_default()
+            };
             return format!("{number_part}{si_prefix}/s");
         }
     }
     // Fallback: return as-is.
-    trimmed.to_string()
+    speed_part.to_string()
 }
 
 /// Parse one John progress line (`--progress-every`). John outputs:
@@ -1895,6 +1932,62 @@ mod tests {
             &mut p
         ));
         assert_eq!(p.eta.as_deref(), Some("1 hour, 5 mins"));
+    }
+
+    #[test]
+    fn hashcat_v7_device_ids_are_parsed() {
+        let mut p = RecoveryProgress::default();
+        // hashcat 7.1.2 per-device Speed lines (#01, #03)
+        assert!(parse_hashcat_progress(
+            "Speed.#01........:   135.2 kH/s (86.96ms) @ Accel:12 Loops:1024 Thr:512 Vec:1",
+            &mut p
+        ));
+        assert_eq!(p.speed.as_deref(), Some("135.2K/s"));
+        // Aggregate line overrides individual
+        assert!(parse_hashcat_progress(
+            "Speed.#*.........:   144.1 kH/s",
+            &mut p
+        ));
+        assert_eq!(p.speed.as_deref(), Some("144.1K/s"));
+        // Candidates with zero-padded device ID
+        assert!(parse_hashcat_progress(
+            "Candidates.#01...: 14632221 -> 66708067",
+            &mut p
+        ));
+        assert_eq!(p.candidate.as_deref(), Some("14632221"));
+        // Second device candidate is ignored (first wins)
+        assert!(parse_hashcat_progress(
+            "Candidates.#03...: 17375510 -> 61588510",
+            &mut p
+        ));
+        assert_eq!(p.candidate.as_deref(), Some("14632221"));
+    }
+
+    #[test]
+    fn hashcat_speed_aggregate_overrides_individual() {
+        let mut p = RecoveryProgress::default();
+        // Individual first, then aggregate
+        assert!(parse_hashcat_progress(
+            "Speed.#03........:     8829 H/s (70.04ms) @ Accel:10 Loops:512 Thr:512 Vec:1",
+            &mut p
+        ));
+        assert_eq!(p.speed.as_deref(), Some("8829/s"));
+        assert!(parse_hashcat_progress(
+            "Speed.#*.........:   144.1 kH/s",
+            &mut p
+        ));
+        assert_eq!(p.speed.as_deref(), Some("144.1K/s"));
+        // Aggregate first, individual should NOT override
+        let mut p2 = RecoveryProgress::default();
+        assert!(parse_hashcat_progress(
+            "Speed.#*.........:   144.1 kH/s",
+            &mut p2
+        ));
+        assert!(parse_hashcat_progress(
+            "Speed.#01........:   135.2 kH/s",
+            &mut p2
+        ));
+        assert_eq!(p2.speed.as_deref(), Some("144.1K/s"));
     }
 
     #[test]
