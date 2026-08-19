@@ -86,12 +86,17 @@ export function RunView() {
     {
       label: t("run.passwordsTried"),
       value:
-        cumulativeTotal !== null && cumulativeTried !== null
-          ? `${formatCount(cumulativeTried)} / ${formatCount(cumulativeTotal)}`
-          : formatCount(cumulativeTried),
+        cumulativeTried !== null && cumulativeTried > 0
+          ? cumulativeTotal !== null
+            ? `${formatCount(cumulativeTried)} / ${formatCount(cumulativeTotal)}`
+            : formatCount(cumulativeTried)
+          : "—",
     },
     { label: t("run.speed"), value: progress?.speed ?? "—" },
-    { label: t("run.currentCandidate"), value: progress?.candidate ?? "—" },
+    {
+      label: t("run.currentCandidate"),
+      value: progress?.candidate ?? "—",
+    },
     { label: t("run.estimatedTime"), value: progress?.eta ?? "—" },
   ];
 
@@ -124,7 +129,7 @@ export function RunView() {
               ? t("run.complete", { percent: percent.toFixed(2) })
               : t("run.waiting")}
           </span>
-          {percent !== null && tried !== null && total !== null && (
+          {percent !== null && tried !== null && tried > 0 && total !== null && (
             <span>
               {t("run.ofCandidates", { tried: formatCount(tried), total: formatCount(total) })}
             </span>
