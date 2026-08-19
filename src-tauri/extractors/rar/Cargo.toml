@@ -1,0 +1,11 @@
+[package]
+name = "rar-extractor"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rar-extractor"
+path = "src/main.rs"
+
+[dependencies]
+extractor-core = { path = "../core" }

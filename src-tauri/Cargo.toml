@@ -5,6 +5,7 @@ members = [
     "extractors/pdf",
     "extractors/office",
     "extractors/zip",
+    "extractors/rar",
 ]
 resolver = "2"
 

@@ -1630,9 +1630,9 @@ mod tests {
 
     #[test]
     fn missing_extractor_reports_unavailable() {
-        // RAR extractor is not implemented, so this exercises the
+        // 7z extractor is not implemented, so this exercises the
         // graceful-degradation path for every variant.
-        let result = extract(Family::Rar, Path::new("/nonexistent/archive.rar"));
+        let result = extract(Family::SevenZ, Path::new("/nonexistent/archive.7z"));
         assert!(!result.ok);
         assert_eq!(
             result.message,
@@ -2138,7 +2138,7 @@ mod tests {
             entry.as_ref().map(|e| e.password.as_str()),
             Some("password123")
         );
-        assert_eq!(entry.as_ref().map(|e| e.engine.as_str()), Some("hashcat"));
+        assert_eq!(entry.as_ref().map(|e| e.engine.as_str()), Some("GPU"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
