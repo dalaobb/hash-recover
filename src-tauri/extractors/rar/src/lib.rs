@@ -255,28 +255,38 @@ fn read_rar5_header<R: Read + Seek>(
     reader: &mut Rar5Reader<R>,
     state: &mut Rar5State,
 ) -> Result<Option<u8>, Error> {
-    // If headers are encrypted, the first SIZE_INITV bytes are the IV.
+    // Every RAR5 header starts with CRC (4 bytes) + block_size (vint).
+    let _head_crc = reader.read_u32()?;
+    let block_size = reader.read_vuint()?;
+
+    // Mark where the header payload starts so we can skip to the end later.
+    let payload_start = reader.position()?;
+
     if state.encrypted_header {
-        let _headers_iv = reader.read_bytes(SIZE_INITV)?;
-        // We already have salt/iv/pswcheck from HEAD_CRYPT; the encrypted
-        // header IV is a different value used for header decryption, but for
-        // hash extraction we already have what we need from the extra data.
+        // The entire payload is encrypted header data.
+        // We already extracted salt/iv/pswcheck from HEAD_CRYPT; just skip.
+        reader.skip_bytes(block_size)?;
         return Ok(None);
     }
 
-    let _head_crc = reader.read_u32()?;
-    let block_size = reader.read_vuint()?;
     let header_type = reader.read_u8()?;
-    let flags = reader.read_vuint()?;
+    let header_flags = reader.read_vuint()?;
 
+    // In RAR5 the order within a header block is:
+    //   header_type  vint
+    //   header_flags vint
+    //   [if HFL_EXTRA: extra_size vint]
+    //   [if HFL_DATA:  data_size vint]
+    //   [type-specific fields]
+    //   [extra data]
+    //   [data]
     let mut extra_size: u64 = 0;
-    let mut data_size: u64 = 0;
-
-    if flags & HFL_EXTRA != 0 {
+    let mut _data_size: u64 = 0;
+    if header_flags & HFL_EXTRA != 0 {
         extra_size = reader.read_vuint()?;
     }
-    if flags & HFL_DATA != 0 {
-        data_size = reader.read_vuint()?;
+    if header_flags & HFL_DATA != 0 {
+        _data_size = reader.read_vuint()?;
     }
 
     match header_type {
@@ -313,27 +323,21 @@ fn read_rar5_header<R: Read + Seek>(
                 };
                 state.psw_check = Some(chk);
 
-                // Verify the PSWCHECK checksum (SHA-256 truncated to 4 bytes).
                 let _chksum = reader.read_bytes(SIZE_PSWCHECK_CSUM)?;
-                // We trust the archive integrity; skip SHA-256 verification.
             }
 
             state.encrypted_header = true;
-            Ok(Some(HEAD_CRYPT))
         }
         HEAD_MAIN => {
-            // Skip remaining header + extra + data.
-            let total = block_size + extra_size + data_size;
-            reader.skip_bytes(total)?;
-            Ok(Some(HEAD_MAIN))
+            // HEAD_MAIN type-specific: archive_flags (vint).
+            // Bit 0: volume number follows.
+            let _archive_flags = reader.read_vuint()?;
         }
         HEAD_FILE | HEAD_SERVICE => {
-            // We need to parse enough to find extra data with encryption info.
             let file_flags = reader.read_vuint()?;
             let _unp_size = reader.read_vuint()?;
             let _file_attr = reader.read_vuint()?;
 
-            // Read optional fields based on flags.
             if file_flags & FHFL_UTIME != 0 {
                 let _mtime = reader.read_u32()?;
             }
@@ -345,26 +349,27 @@ fn read_rar5_header<R: Read + Seek>(
             let _host_os = reader.read_vuint()?;
             let name_size = reader.read_vuint()?;
 
-            // Skip the field name.
             reader.skip_bytes(name_size)?;
 
-            // Process extra data if present.
             if extra_size != 0 {
                 process_file_header_extra(reader, extra_size, state)?;
             }
-
-            // Skip any remaining data.
-            reader.skip_bytes(data_size)?;
-
-            Ok(Some(header_type))
         }
-        HEAD_ENDARC => Ok(None),
-        _ => {
-            // Unknown header type; skip remaining data.
-            reader.skip_bytes(extra_size + data_size)?;
-            Ok(Some(header_type))
-        }
+        HEAD_ENDARC => return Ok(None),
+        _ => {}
     }
+
+    // Always advance to the end of this header block.
+    let consumed = reader.position()? - payload_start;
+    if consumed < block_size {
+        reader.skip_bytes(block_size - consumed)?;
+    }
+    // The data area sits outside block_size; skip it too.
+    if _data_size > 0 {
+        reader.skip_bytes(_data_size)?;
+    }
+
+    Ok(Some(header_type))
 }
 
 /// Process extra data in a RAR5 file/service header.
@@ -404,14 +409,12 @@ fn extract_rar5(path: &Path) -> Result<Vec<HashLine>, Error> {
     let mut reader = Rar5Reader::new(file);
     let mut state = Rar5State::new();
 
+    // Skip the 8-byte RAR5 magic signature.
+    reader.skip_bytes(RAR5_MAGIC.len() as u64)?;
+
     loop {
         match read_rar5_header(&mut reader, &mut state)? {
-            Some(HEAD_CRYPT) => {
-                // HEAD_CRYPT sets state.encrypted_header = true.
-                // The next header read will return None (encrypted headers
-                // can't be parsed without decryption). We have salt/iv/pswcheck.
-                continue;
-            }
+            Some(HEAD_CRYPT) => continue,
             Some(HEAD_ENDARC) | None => break,
             _ => continue,
         }
