@@ -797,13 +797,14 @@ fn normalize_speed(raw: &str) -> String {
 
 /// Parse one John progress line (`--progress-every`). John outputs:
 ///
-/// Progress: `0g 0:00:00:03 26.19% (ETA: 21:50:09) 0g/s 1134Kp/s ...`
-/// Done:     `1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s ...`
+/// Progress: `0g 0:00:00:03 26.19% (ETA: 21:50:09) 0g/s 1134Kp/s 1134Kc/s 1134KC/s sean91704..sean-crysta`
+/// Done:     `1g 0:00:00:00 DONE (2026-08-17 21:48) 2.178g/s 1122Kp/s 1122Kc/s 1122KC/s 0234065415..0234991515`
 ///
 /// Parsed fields: tried (`Xg` token), percent (token 2), speed (`NUMBERp/s`
-/// token), ETA (`ETA: HH:MM:SS`).  Like Hashcat's incremental mode, John
-/// resets its guess counter when moving to the next mask group; we accumulate
-/// across groups so the UI shows a single growing number.
+/// token), ETA (`ETA: HH:MM:SS`), candidate (last token, e.g. `a..z` range).
+/// Like Hashcat's incremental mode, John resets its guess counter when moving
+/// to the next mask group; we accumulate across groups so the UI shows a
+/// single growing number.
 fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
     let mut updated = false;
     let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -814,6 +815,8 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
                 // Detect segment reset: guess count dropped.
                 if let Some(prev) = last.prev_tried {
                     if g < prev {
+                        // The previous segment is complete.  Add its total to
+                        // the accumulator so cumulative counts keep growing.
                         if let Some(seg) = last.segment_total {
                             last.accum_total += seg;
                         }
@@ -829,6 +832,16 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
     if let Some(pct) = tokens.get(2).and_then(|t| t.strip_suffix('%')) {
         if let Ok(p) = pct.parse::<f64>() {
             last.percent = Some(p);
+            // John doesn't report total directly; derive it from tried and percent.
+            if let Some(tried) = last.tried {
+                if p > 0.0 {
+                    let total = ((tried as f64) / (p / 100.0)).round() as u64;
+                    last.total = Some(total);
+                    last.cumulative_total = Some(last.accum_total + total);
+                    // Also set segment_total so reset detection works correctly.
+                    last.segment_total = Some(total);
+                }
+            }
             updated = true;
         }
     }
@@ -850,6 +863,14 @@ fn parse_john_progress(line: &str, last: &mut RecoveryProgress) -> bool {
                 last.eta = Some(eta.to_string());
                 updated = true;
             }
+        }
+    }
+    // Candidate: last token is the current candidate range, e.g.
+    // "sean91704..sean-crysta" or "0234065415..0234991515".
+    if let Some(last_token) = tokens.last() {
+        if last_token.contains("..") && !last_token.starts_with('(') {
+            last.candidate = Some(last_token.to_string());
+            updated = true;
         }
     }
     updated
@@ -2073,6 +2094,33 @@ mod tests {
         assert_eq!(p.percent, Some(26.19));
         assert_eq!(p.speed.as_deref(), Some("1134K/s"));
         assert_eq!(p.eta.as_deref(), Some("21:50:09"));
+        assert_eq!(p.candidate.as_deref(), Some("sean91704..sean-crysta"));
+        assert_eq!(p.tried, Some(0));
+        // total derived from 0g / 26.19% → 0 (can't derive from 0)
+        assert_eq!(p.cumulative_tried, Some(0));
+    }
+
+    #[test]
+    fn john_progress_derives_total_from_percent() {
+        let mut p = RecoveryProgress::default();
+        assert!(parse_john_progress(
+            "500g 0:00:00:03 10.00% (ETA: 21:50:09) 0g/s 1134Kp/s 1134Kc/s 1134KC/s abcd..wxyz",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(500));
+        assert_eq!(p.total, Some(5000)); // 500 / 0.10
+        assert_eq!(p.cumulative_tried, Some(500));
+        assert_eq!(p.cumulative_total, Some(5000));
+    }
+
+    #[test]
+    fn john_candidate_is_last_token() {
+        let mut p = RecoveryProgress::default();
+        assert!(parse_john_progress(
+            "100g 0:00:00:01 5.00% (ETA: 22:00:00) 0g/s 500Kp/s 500Kc/s 500KC/s password123..zxcvbn999",
+            &mut p
+        ));
+        assert_eq!(p.candidate.as_deref(), Some("password123..zxcvbn999"));
     }
 
     #[test]
@@ -2083,6 +2131,41 @@ mod tests {
             &mut p
         ));
         assert_eq!(p.speed.as_deref(), Some("1122K/s"));
+        assert_eq!(p.candidate.as_deref(), Some("0234065415..0234991515"));
+    }
+
+    #[test]
+    fn john_increment_accumulates_tried() {
+        let mut p = RecoveryProgress::default();
+        // Segment 1: 100 tried, 10%
+        assert!(parse_john_progress(
+            "100g 0:00:00:01 10.00% (ETA: 22:00:00) 0g/s 1000Kp/s",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(100));
+        assert_eq!(p.cumulative_tried, Some(100));
+        assert_eq!(p.cumulative_total, Some(1000));
+        // Segment 1 completes: 1000/1000
+        assert!(parse_john_progress(
+            "1000g 0:00:00:10 100.00% (ETA: 22:00:00) 0g/s 1000Kp/s",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(1000));
+        assert_eq!(p.cumulative_tried, Some(1000));
+        // Segment 2 starts: tried resets to 0.
+        assert!(parse_john_progress(
+            "0g 0:00:00:00 0.00% (ETA: 22:00:00) 0g/s 500Kp/s",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(0));
+        assert_eq!(p.cumulative_tried, Some(1000)); // 1000 from seg 1 + 0
+                                                    // 200 tried in segment 2.
+        assert!(parse_john_progress(
+            "200g 0:00:00:02 4.00% (ETA: 22:00:00) 0g/s 500Kp/s",
+            &mut p
+        ));
+        assert_eq!(p.tried, Some(200));
+        assert_eq!(p.cumulative_tried, Some(1200)); // 1000 + 200
     }
 
     #[test]
