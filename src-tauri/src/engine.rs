@@ -1630,14 +1630,11 @@ mod tests {
 
     #[test]
     fn missing_extractor_reports_unavailable() {
-        // 7z extractor is not implemented, so this exercises the
-        // graceful-degradation path for every variant.
+        // All families now have extractors, but a nonexistent file should
+        // still produce a friendly error rather than a crash.
         let result = extract(Family::SevenZ, Path::new("/nonexistent/archive.7z"));
         assert!(!result.ok);
-        assert_eq!(
-            result.message,
-            Some("Password recovery for this format is not available.")
-        );
+        assert!(result.message.is_some(), "should have an error message");
     }
 
     #[test]

@@ -1,0 +1,13 @@
+[package]
+name = "sevenz-extractor"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "sevenz-extractor"
+path = "src/main.rs"
+
+[dependencies]
+extractor-core = { path = "../core" }
+lzma-rs = "0.3"
+crc32fast = "1"
