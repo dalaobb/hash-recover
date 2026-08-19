@@ -676,13 +676,11 @@ fn parse_hashcat_progress(line: &str, last: &mut RecoveryProgress) -> bool {
             }
             true
         }
-        // Candidates.#01, Candidates.#03, … — first device wins.
+        // Candidates.#01, Candidates.#03, … — updated every status block.
         k if k.starts_with("Candidates.") => {
-            if last.candidate.is_none() {
-                let current = value.split(" -> ").next().unwrap_or(value).trim();
-                if !current.is_empty() {
-                    last.candidate = Some(current.to_string());
-                }
+            let current = value.split(" -> ").next().unwrap_or(value).trim();
+            if !current.is_empty() {
+                last.candidate = Some(current.to_string());
             }
             true
         }
@@ -1955,12 +1953,12 @@ mod tests {
             &mut p
         ));
         assert_eq!(p.candidate.as_deref(), Some("14632221"));
-        // Second device candidate is ignored (first wins)
+        // Second device candidate overwrites first (both are same-second data)
         assert!(parse_hashcat_progress(
             "Candidates.#03...: 17375510 -> 61588510",
             &mut p
         ));
-        assert_eq!(p.candidate.as_deref(), Some("14632221"));
+        assert_eq!(p.candidate.as_deref(), Some("17375510"));
     }
 
     #[test]
