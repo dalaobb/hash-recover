@@ -308,7 +308,7 @@ pub fn recover_with_sink(
 
     // John fallback, and the only engine for Hashcat-less hashes.
     if let Some(john_format) = normalized.john_format {
-        let john_path = resolve_program("john");
+        let john_path = resolve_john();
         crate::logging::event(
             "engine",
             "john_resolve",
@@ -1349,6 +1349,89 @@ pub fn resolve_program(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Resolve the John binary, bypassing the SIMD launcher stub shipped with the
+/// official Windows packages.
+///
+/// Since v1.9.1-ce the Windows builds ship `john.exe` as a tiny Cygwin
+/// launcher that `execv`s the best matching `john-<simd>[-omp].exe` as a
+/// *separate* process. Pause/resume (`NtSuspendProcess`) and cancel
+/// (`TerminateProcess`) only reach the launcher, so they no longer affect the
+/// actual cracking worker. Spawning the worker binary directly keeps the
+/// existing pause/cancel logic intact.
+fn resolve_john() -> Option<PathBuf> {
+    let john = resolve_program("john")?;
+    Some(pick_simd_worker(&john))
+}
+
+/// If `john` is the SIMD launcher layout (a `john-avx*.exe` tree next to
+/// `john.exe`), return the worker binary matching this CPU: AVX512BW > AVX2 >
+/// AVX, OpenMP build preferred. Any other layout returns `john` unchanged.
+fn pick_simd_worker(john: &Path) -> PathBuf {
+    let Some(dir) = john.parent() else {
+        return john.to_path_buf();
+    };
+    if !dir.join("john-avx.exe").is_file() {
+        return john.to_path_buf();
+    }
+    let (has_avx512bw, has_avx2, has_avx) = cpu_simd_features();
+    let picked = simd_variant_chain(dir, has_avx512bw, has_avx2, has_avx);
+    match picked {
+        Some(p) => {
+            crate::logging::event(
+                "engine",
+                "john_launcher_bypass",
+                "found",
+                Some(&p.display().to_string()),
+            );
+            p
+        }
+        None => john.to_path_buf(),
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn cpu_simd_features() -> (bool, bool, bool) {
+    (
+        std::arch::is_x86_feature_detected!("avx512bw"),
+        std::arch::is_x86_feature_detected!("avx2"),
+        std::arch::is_x86_feature_detected!("avx"),
+    )
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn cpu_simd_features() -> (bool, bool, bool) {
+    (false, false, false)
+}
+
+/// Most-capable-to-least order for the SIMD worker binaries, preferring the
+/// OpenMP build (the package bundles `cyggomp-1.dll`).
+fn simd_variant_chain(
+    dir: &Path,
+    has_avx512bw: bool,
+    has_avx2: bool,
+    has_avx: bool,
+) -> Option<PathBuf> {
+    let mut stems: Vec<&str> = Vec::new();
+    if has_avx512bw {
+        stems.push("john-avx512bw");
+    }
+    if has_avx2 {
+        stems.push("john-avx2");
+    }
+    if has_avx {
+        stems.push("john-avx");
+    }
+    for stem in stems {
+        for name in [format!("{stem}-omp.exe"), format!("{stem}.exe")] {
+            let candidate = dir.join(&name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 /// Search the given directories for a program binary, checking both the flat
 /// layout and a subfolder named after the program.
 fn find_program_in_dirs(dirs: &[PathBuf], name: &str, candidates: &[String]) -> Option<PathBuf> {
@@ -1812,6 +1895,56 @@ mod tests {
         assert_eq!(john_login_name(Some(r"D:\Downloads\xxx.pdf")), "xxx");
         assert_eq!(john_login_name(Some("archive.zip")), "archive");
         assert_eq!(john_login_name(None), "hashrecover");
+    }
+
+    #[test]
+    fn simd_worker_picks_most_capable_present_variant() {
+        let dir = std::env::temp_dir().join(format!("hashrecover-simd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "john-avx.exe",
+            "john-avx-omp.exe",
+            "john-avx2.exe",
+            "john-avx2-omp.exe",
+            "john-avx512bw.exe",
+            "john-avx512bw-omp.exe",
+        ] {
+            std::fs::write(dir.join(name), "").unwrap();
+        }
+        // Full package: the best CPU wins, OpenMP preferred.
+        let p = simd_variant_chain(&dir, true, true, true).unwrap();
+        assert_eq!(p.file_name().unwrap(), "john-avx512bw-omp.exe");
+        let p = simd_variant_chain(&dir, false, true, true).unwrap();
+        assert_eq!(p.file_name().unwrap(), "john-avx2-omp.exe");
+        let p = simd_variant_chain(&dir, false, false, true).unwrap();
+        assert_eq!(p.file_name().unwrap(), "john-avx-omp.exe");
+        // Missing OpenMP build falls back to the plain build.
+        std::fs::remove_file(dir.join("john-avx2-omp.exe")).unwrap();
+        let p = simd_variant_chain(&dir, false, true, true).unwrap();
+        assert_eq!(p.file_name().unwrap(), "john-avx2.exe");
+        // A partial package still resolves down the chain.
+        std::fs::remove_file(dir.join("john-avx-omp.exe")).unwrap();
+        std::fs::remove_file(dir.join("john-avx.exe")).unwrap();
+        assert!(simd_variant_chain(&dir, false, false, true).is_none());
+        // No SIMD support at all: nothing to pick (caller keeps john.exe).
+        assert!(simd_variant_chain(&dir, false, false, false).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn simd_worker_chain_is_capability_ordered() {
+        let dir = std::env::temp_dir().join(format!("hashrecover-simd2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("john-avx.exe"), "").unwrap();
+        std::fs::write(dir.join("john-avx2-omp.exe"), "").unwrap();
+        std::fs::write(dir.join("john-avx512bw-omp.exe"), "").unwrap();
+        // AVX512BW CPU picks the avx512bw build even though avx2 also exists.
+        let p = simd_variant_chain(&dir, true, true, true).unwrap();
+        assert_eq!(p.file_name().unwrap(), "john-avx512bw-omp.exe");
+        // AVX2-only CPU skips the avx512bw build and picks avx2.
+        let p = simd_variant_chain(&dir, false, true, true).unwrap();
+        assert_eq!(p.file_name().unwrap(), "john-avx2-omp.exe");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
