@@ -180,8 +180,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Diagnostics for the John lifecycle bug: on exit, report whether
+            // an engine child is still registered and terminate it with the
+            // existing cancel path so the log names its PID and result.
+            if let tauri::RunEvent::Exit = event {
+                engine::terminate_active_child_on_exit();
+            }
+        });
 }
 
 #[cfg(test)]

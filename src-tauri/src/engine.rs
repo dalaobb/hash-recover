@@ -21,7 +21,16 @@ use crate::strategy::{RecoverRequest, RecoverResult, StrategyKind};
 
 /// Handle of the engine process currently running, so the user can cancel a
 /// recovery attempt from the UI.
-static ACTIVE_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+static ACTIVE_CHILD: Mutex<Option<ActiveChild>> = Mutex::new(None);
+
+/// The tracked engine child plus the program path it was spawned from. The
+/// path is kept only so termination logs can name the executable that owned
+/// the PID (the PID alone cannot after process exit).
+struct ActiveChild {
+    child: Child,
+    /// Program path as passed to `Command::new`.
+    program: String,
+}
 /// Which engine is currently running, so pause/resume picks the right action.
 static ACTIVE_SOURCE: Mutex<Option<ProgressSource>> = Mutex::new(None);
 /// Set when the user cancels; `recover` checks it between engine runs.
@@ -532,9 +541,50 @@ fn cancelled() -> bool {
 pub fn cancel_recovery() {
     CANCELLED.store(true, Ordering::SeqCst);
     if let Ok(mut guard) = ACTIVE_CHILD.lock() {
-        if let Some(child) = guard.as_mut() {
-            let _ = child.kill();
+        if let Some(active) = guard.as_mut() {
+            kill_tracked("cancel", active);
         }
+    }
+}
+
+/// Kill a tracked engine child and log the termination attempt: target PID,
+/// target executable, success/failure and the OS error message on failure.
+fn kill_tracked(reason: &str, active: &mut ActiveChild) {
+    let pid = active.child.id();
+    match active.child.kill() {
+        Ok(()) => crate::logging::event(
+            "engine",
+            "terminate",
+            "killed",
+            Some(&format!("reason={reason} pid={pid} exe={}", active.program)),
+        ),
+        Err(err) => crate::logging::event(
+            "engine",
+            "terminate",
+            "failed",
+            Some(&format!(
+                "reason={reason} pid={pid} exe={} error={err}",
+                active.program
+            )),
+        ),
+    }
+}
+
+/// Application-exit hook: report whether an engine child is still registered
+/// and terminate it best-effort so the John lifecycle stays observable when
+/// the app closes during a run. Diagnostics only; no new process management.
+pub fn terminate_active_child_on_exit() {
+    let mut guard = ACTIVE_CHILD.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(active) = guard.as_mut() {
+        crate::logging::event(
+            "engine",
+            "shutdown",
+            "active_child",
+            Some(&format!("pid={} exe={}", active.child.id(), active.program)),
+        );
+        kill_tracked("app_exit", active);
+    } else {
+        crate::logging::event("engine", "shutdown", "no_active_child", None);
     }
 }
 
@@ -576,11 +626,24 @@ fn spawn_tracked(
         .stderr(std::process::Stdio::piped());
     crate::logging::event("engine", "command", "spawn", Some(&format_command(cmd)));
     let mut child = cmd.spawn()?;
+    let pid = child.id();
+    // Post-spawn record: the exact executable handed to the OS plus the PID
+    // it was given, so any surviving john process can be attributed to this
+    // spawn (same PID) or to a child/replacement John created itself.
+    crate::logging::event(
+        "engine",
+        "spawn",
+        "started",
+        Some(&format!("pid={pid} {}", format_command(cmd))),
+    );
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     {
         let mut guard = ACTIVE_CHILD.lock().unwrap();
-        *guard = Some(child);
+        *guard = Some(ActiveChild {
+            child,
+            program: cmd.get_program().to_string_lossy().into_owned(),
+        });
     }
     *ACTIVE_SOURCE.lock().unwrap() = Some(source);
 
@@ -596,16 +659,27 @@ fn spawn_tracked(
     let status = loop {
         std::thread::sleep(Duration::from_millis(50));
         let mut guard = ACTIVE_CHILD.lock().unwrap();
-        let child = guard.as_mut().expect("active child is set while running");
-        match child.try_wait()? {
+        let active = guard.as_mut().expect("active child is set while running");
+        match active.child.try_wait()? {
             Some(status) => break status,
             None => {
                 if CANCELLED.load(Ordering::SeqCst) {
-                    let _ = child.kill();
+                    kill_tracked("cancel", active);
                 }
             }
         }
     };
+
+    // Lifecycle diagnostics: how the spawned PID ended. A john-* process that
+    // survives this point with the same PID means the kill/exit was not
+    // effective for it; a survivor with a different PID must be a John-created
+    // descendant or a launcher exec replacement.
+    crate::logging::event(
+        "engine",
+        "exit",
+        "observed",
+        Some(&format!("pid={pid} status={status} source={source:?}")),
+    );
 
     {
         let mut guard = ACTIVE_CHILD.lock().unwrap();
@@ -902,7 +976,7 @@ fn active_pid() -> Option<u32> {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|child| child.id())
+        .map(|child| child.child.id())
 }
 
 #[cfg(unix)]
@@ -1360,33 +1434,95 @@ pub fn resolve_program(name: &str) -> Option<PathBuf> {
 /// existing pause/cancel logic intact.
 fn resolve_john() -> Option<PathBuf> {
     let john = resolve_program("john")?;
+    crate::logging::event(
+        "engine",
+        "john_resolve",
+        "program_found",
+        Some(&format!("original={}", john.display())),
+    );
     Some(pick_simd_worker(&john))
 }
 
 /// If `john` is the SIMD launcher layout (a `john-avx*.exe` tree next to
 /// `john.exe`), return the worker binary matching this CPU: AVX512BW > AVX2 >
 /// AVX, OpenMP build preferred. Any other layout returns `john` unchanged.
+///
+/// Every decision point emits a structured log so the John process lifecycle
+/// can be reconstructed from diagnostics alone.
 fn pick_simd_worker(john: &Path) -> PathBuf {
     let Some(dir) = john.parent() else {
+        crate::logging::event(
+            "engine",
+            "john_resolve",
+            "launcher_layout_unknown",
+            Some(&format!("reason=no_parent_dir keep={}", john.display())),
+        );
         return john.to_path_buf();
     };
     if !dir.join("john-avx.exe").is_file() {
+        // Not the Windows SIMD launcher layout; `john` runs directly.
+        crate::logging::event(
+            "engine",
+            "john_resolve",
+            "launcher_layout_absent",
+            Some(&format!("dir={} keep={}", dir.display(), john.display())),
+        );
         return john.to_path_buf();
     }
+    crate::logging::event(
+        "engine",
+        "john_resolve",
+        "launcher_layout_detected",
+        Some(&format!("dir={}", dir.display())),
+    );
     let (has_avx512bw, has_avx2, has_avx) = cpu_simd_features();
+    let present = simd_workers_present(dir);
+    crate::logging::event(
+        "engine",
+        "john_resolve",
+        "worker_candidates",
+        Some(&format!(
+            "cpu=avx512bw:{has_avx512bw},avx2:{has_avx2},avx:{has_avx} present={}",
+            present.join(",")
+        )),
+    );
     let picked = simd_variant_chain(dir, has_avx512bw, has_avx2, has_avx);
     match picked {
         Some(p) => {
             crate::logging::event(
                 "engine",
-                "john_launcher_bypass",
-                "found",
-                Some(&p.display().to_string()),
+                "john_resolve",
+                "worker_selected",
+                Some(&format!("selected={}", p.display())),
             );
             p
         }
-        None => john.to_path_buf(),
+        None => {
+            // Launcher layout exists but no worker matched this CPU/bundle;
+            // fall back to `john.exe` itself (the launcher stub).
+            crate::logging::event(
+                "engine",
+                "john_resolve",
+                "fallback_to_launcher",
+                Some(&format!("fallback={}", john.display())),
+            );
+            john.to_path_buf()
+        }
     }
+}
+
+/// Existing `john-avx*.exe` worker binaries in `dir`, sorted, for diagnostics
+/// only. Selection itself still goes through `simd_variant_chain`.
+fn simd_workers_present(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("john-avx") && name.ends_with(".exe"))
+        .collect();
+    names.sort();
+    names
 }
 
 #[cfg(target_arch = "x86_64")]
